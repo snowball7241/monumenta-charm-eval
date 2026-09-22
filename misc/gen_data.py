@@ -1,5 +1,6 @@
 import json 
 from urllib.request import urlopen
+import re
 
 def gen(j: list[dict]):
     ids = []
@@ -28,7 +29,7 @@ def gen(j: list[dict]):
     #include <string_view>
     namespace mtce
     {{
-        enum class charm_effects : std::uint16_t {{ {",\n".join([i.upper() for i in ids])}, ABILITY_COUNT }};
+        enum class charm_effects : std::uint16_t {{ {",\n".join([re.sub('[^0-9a-zA-Z_]+', '', i).upper() for i in ids])}, ABILITY_COUNT }};
 
         inline static constexpr std::size_t ABILITY_COUNT = static_cast<std::size_t>(charm_effects::ABILITY_COUNT);
 
