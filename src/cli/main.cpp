@@ -121,15 +121,25 @@ namespace
         // warning - this algo is ugly
         std::println(std::cout, "Optimal charm set (" green("{}") "): ", result.utility_value);
         std::uint32_t curr_cp = 0;
+        std::uint32_t upgrades = 0;
 
         for (const auto charm_index : result.charms)
         {
             const auto& charm = charms[charm_index];
             std::println(std::cout, "  {} (" green("{}") ")", colorize(charm.color, charm.name), charm.charm_power);
             curr_cp += charm.charm_power;
+            upgrades += charm.is_upgrade ? 1 : 0;
         }
 
         std::println(std::cout, "Charm power used: " green("{}") "/" green("{}"), curr_cp, config.max_cp);
+        if (config.max_upgrades < CHARM_COUNT_MAX)
+        {
+            std::println(std::cout, "Upgrades used: " green("{}") "/" green("{}"), upgrades, config.max_upgrades);
+        }
+        else
+        {
+            std::println(std::cout, "Upgrades used: " green("{}"), upgrades);
+        }
         std::println(std::cout, "Set stats: ");
         print_charm_stats(result, charms, config);
     }
@@ -139,6 +149,11 @@ namespace
         void operator()(naive_algo_flags flags)
         {
             std::println(std::cout, "MTCE algorithm: " yellow("naive") " with " green("{}") " worker(s)", flags.threads);
+        }
+
+        void operator()(bnb_algo_flags flags)
+        {
+            std::println(std::cout, "MTCE algorithm: " yellow("bnb") " with " green("{}") " worker(s)", flags.threads);
         }
     };
 
@@ -179,6 +194,39 @@ namespace
                     .max_cp = config.max_cp,
                     .weights = config.to_weights(),
                     .threads = flags.threads,
+                    .max_upgrades = config.max_upgrades,
+                    .upgrade_penalty = config.upgrade_penalty,
+                },
+                trace
+            );
+        }
+
+        static void bnb_trace_stats(const bnb_stats& stats)
+        {
+            std::println(std::cout, gray("bnb - considered {} charm(s) over {} weighted effect(s)"), stats.charms, stats.effects);
+            std::println(
+                std::cout, gray("bnb - scored {} set(s), pruned {} subtree(s) ({} needed the charm-power bound)"), stats.visited, stats.pruned,
+                stats.pruned_knapsack
+            );
+        }
+
+        auto operator()(bnb_algo_flags flags) -> eval_result
+        {
+            bnb_tracing_config trace;
+
+            if (flags.enable_trace)
+            {
+                trace.trace_stats = algo_invoker::bnb_trace_stats;
+            }
+
+            return evaluate_bnb(
+                {
+                    .charms = charms,
+                    .max_cp = config.max_cp,
+                    .weights = config.to_weights(),
+                    .threads = flags.threads,
+                    .max_upgrades = config.max_upgrades,
+                    .upgrade_penalty = config.upgrade_penalty,
                 },
                 trace
             );
@@ -228,6 +276,14 @@ auto main(int argc, const char* const* argv) -> int
         std::println(std::cout, "Starting MTCE " yellow(VERSION));
         std::println(std::cout, "Config: ");
         std::println(std::cout, "  charm_power" gray(" = ") green("{}"), config.max_cp);
+        if (config.max_upgrades < CHARM_COUNT_MAX)
+        {
+            std::println(std::cout, "  max_upgrades" gray(" = ") green("{}"), config.max_upgrades);
+        }
+        if (config.upgrade_penalty > 0)
+        {
+            std::println(std::cout, "  upgrade_penalty" gray(" = ") green("{}"), config.upgrade_penalty);
+        }
         std::println(std::cout, "Weights: ");
 
         for (const auto& [key, value] : config.ability_weights)

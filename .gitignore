@@ -1,10 +1,31 @@
-build
-build-debug 
-bin
-a.out 
+# build output (meson build dirs, binaries)
+/build/
+/build-*/
+/bin/
+a.out
 compile_commands.json
-.cache 
-.vim 
-subprojects/dpp
-subprojects/argparse
-node_modules
+/subprojects/dpp
+/subprojects/argparse
+
+# editor / OS
+.cache/
+.vim/
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# node
+node_modules/
+npm-debug.log*
+
+# secrets / local environment
+.env
+.env.*
+
+# bot runtime files: config.json holds the Discord token (see bot/config.example.json),
+# data.json holds user configs, audit/ holds uploaded charm files, mtce is a local symlink to the build
+bot/config.json
+bot/data.json
+bot/audit/
+bot/mtce

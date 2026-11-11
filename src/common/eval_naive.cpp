@@ -20,7 +20,20 @@ namespace mtce
 
     namespace
     {
-        using cp_buffer = std::vector<uint32_t>;
+        // Charm power and upgrade count are tracked together in one packed "budget" integer so that the hot loop keeps a single
+        // test. Byte 0 holds charm power, byte 1 holds the number of upgraded "(u)" charms. Each byte starts biased at
+        // (127 - limit), so it reaches 128 (its top bit) exactly when the set goes over that limit; `budget & BUDGET_OVER` then
+        // detects either violation at once. A byte never carries into the next: the search stops as soon as one overflows, a
+        // charm adds at most max_cp <= 15 (charms costing more are dropped up front) and at most 1 upgrade, so a byte stays
+        // below 128 + 15.
+        using cp_buffer = std::vector<uint32_t>; // per charm: charm power | (is_upgrade << 8)
+
+        inline constexpr uint32_t BUDGET_OVER = 0x8080U;
+
+        constexpr auto budget_bias(uint32_t max_cp, uint32_t max_upgrades) -> uint32_t
+        {
+            return (127U - max_cp) | ((127U - std::min<uint32_t>(max_upgrades, CHARM_COUNT_MAX)) << 8U);
+        }
 
         using offset_buffer = std::vector<uint32_t>;
 
@@ -32,7 +45,7 @@ namespace mtce
             const charm_buffer<N>& charms;
             const cp_buffer& cp_table;
             const offset_buffer& offset_table;
-            uint32_t max_cp;
+            uint32_t budget_bias;
             table_t<N> weights;
             size_t n_threads;
         };
@@ -44,13 +57,12 @@ namespace mtce
             std::span<const table_t<N>> charms;
             std::span<const uint32_t> cp_table;
             std::span<const uint32_t> offset_table;
-            uint32_t max_charm_power;
 
             int64_t max_utility_value = -1;
             charm_set_buffer best_charm_set;
 
             charm_eval_helper(const eval_config_static<N>& cfg)
-                : weights(cfg.weights), charms(cfg.charms), cp_table(cfg.cp_table), offset_table(cfg.offset_table), max_charm_power(cfg.max_cp)
+                : weights(cfg.weights), charms(cfg.charms), cp_table(cfg.cp_table), offset_table(cfg.offset_table)
             {
             }
 
@@ -68,9 +80,10 @@ namespace mtce
             }
 
             template <int CharmsLeft>
-            [[gnu::always_inline]] constexpr auto eval_charm(const table_t<N>& curr, uint32_t curr_cp, const charm_set_buffer& set, size_t prev_idx)
+            // `budget` is the packed charm power / upgrade count described at cp_buffer
+            [[gnu::always_inline]] constexpr auto eval_charm(const table_t<N>& curr, uint32_t budget, const charm_set_buffer& set, size_t prev_idx)
             {
-                if (curr_cp > max_charm_power)
+                if ((budget & BUDGET_OVER) != 0)
                 {
                     return;
                 }
@@ -101,7 +114,7 @@ namespace mtce
                             new_charm_set_stats.stat_table.at(j) += charm.stat_table.at(j);
                         }
 
-                        eval_charm<CharmsLeft - 1>(new_charm_set_stats, curr_cp + cp_table[i], new_charm_set, i + offset_table[i]);
+                        eval_charm<CharmsLeft - 1>(new_charm_set_stats, budget + cp_table[i], new_charm_set, i + offset_table[i]);
                     }
                 }
             }
@@ -114,7 +127,7 @@ namespace mtce
             table_t<N> stats_buffer{};
 
             charm_set_buffer id_buffer;
-            helper.template eval_charm<CHARM_COUNT_MAX>(stats_buffer, 0, id_buffer, 0);
+            helper.template eval_charm<CHARM_COUNT_MAX>(stats_buffer, cfg.budget_bias, id_buffer, 0);
             return {helper.max_utility_value, helper.best_charm_set};
         }
 
@@ -133,7 +146,8 @@ namespace mtce
 
             for (size_t i = 0; i < cfg.n_threads; i++)
             {
-                std::thread worker([&helper = results[i], &jobs, &charms = cfg.charms, &cp_table = cfg.cp_table, &offs = cfg.offset_table]() {
+                std::thread worker([&helper = results[i], &jobs, &charms = cfg.charms, &cp_table = cfg.cp_table, &offs = cfg.offset_table,
+                                    bias = cfg.budget_bias]() {
                     while (true)
                     {
                         auto curr_job = jobs.fetch_add(1);
@@ -147,7 +161,7 @@ namespace mtce
                         charm_set_buffer id_buffer;
                         id_buffer.data[0] = curr_job;
 
-                        helper.template eval_charm<CHARM_COUNT_MAX - 1>(stats_buffer, cp_table[curr_job], id_buffer, curr_job + offs[curr_job]);
+                        helper.template eval_charm<CHARM_COUNT_MAX - 1>(stats_buffer, bias + cp_table[curr_job], id_buffer, curr_job + offs[curr_job]);
                     }
                 });
                 workers.emplace_back(std::move(worker));
@@ -184,13 +198,15 @@ namespace mtce
             charm_id original_index{};
             uint32_t charm_power{};
             bool has_upgrade{};
+            bool is_upgrade{};
             std::vector<int32_t> stat_table;
         };
 
         // a bridge between the dynamic "input" space and the specialized "evaluation" space
         template <std::size_t N>
         constexpr auto eval_charms_dyn(
-            const std::vector<charm_compact_dyn>& charms, uint32_t max_charm_power, const std::vector<int32_t>& weights, size_t n_threads
+            const std::vector<charm_compact_dyn>& charms, uint32_t max_charm_power, uint32_t max_upgrades, const std::vector<int32_t>& weights,
+            size_t n_threads
         )
         {
             charm_buffer<N> _charms;
@@ -205,7 +221,7 @@ namespace mtce
             for (const auto& charm : charms)
             {
                 table_t<N> storage{};
-                cp_table.push_back(charm.charm_power);
+                cp_table.push_back(charm.charm_power | ((charm.is_upgrade ? 1U : 0U) << 8U));
                 offset_table.push_back(charm.has_upgrade ? 2 : 1);
                 std::copy(charm.stat_table.begin(), charm.stat_table.end(), storage.stat_table.begin());
                 _charms.emplace_back(std::move(storage));
@@ -217,14 +233,15 @@ namespace mtce
                 .charms = _charms,
                 .cp_table = cp_table,
                 .offset_table = offset_table,
-                .max_cp = max_charm_power,
+                .budget_bias = budget_bias(max_charm_power, max_upgrades),
                 .weights = _weights,
                 .n_threads = n_threads,
             });
         }
 
         using eval_charm_delegate_t = internal_result_t (*)(
-            const std::vector<charm_compact_dyn>& charms, uint32_t max_charm_power, const std::vector<int32_t>& weights, size_t n_threads
+            const std::vector<charm_compact_dyn>& charms, uint32_t max_charm_power, uint32_t max_upgrades, const std::vector<int32_t>& weights,
+            size_t n_threads
         );
 
         template <std::size_t N>
@@ -241,7 +258,8 @@ namespace mtce
             static constexpr eval_charm_delegate_t TABLE[] = {eval_charms_dyn<TABLE_SIZE_FOR<Counts>>...};
         };
 
-        using table_helper = _table_helper<std::make_index_sequence<ABILITY_COUNT + 1>>;
+        // + 2: zero to ABILITY_COUNT weighted effects, plus the optional hidden upgrade-penalty column
+        using table_helper = _table_helper<std::make_index_sequence<ABILITY_COUNT + 2>>;
 
         struct eval_prep_result
         {
@@ -251,8 +269,14 @@ namespace mtce
         };
 
         // pre-processing step for charm data
-        auto prepare_charm_data(const std::vector<charm>& charms, const charm_weights& weights) -> eval_prep_result
+        auto prepare_charm_data(const std::vector<charm>& charms, const charm_weights& weights, uint32_t max_cp, int32_t upgrade_penalty)
+            -> eval_prep_result
         {
+            // the upgrade penalty is a hidden last stat column: UPGRADE_PENALTY_COLUMN_VALUE per "(u)" charm, weighted
+            // -penalty * CHARM_COUNT_MAX, so each upgrade costs upgrade_penalty_to_utility(penalty). Even 7 upgrades sum to at most
+            // the cap, so the column is never clipped and the cost stays exactly linear.
+            const bool penalty_column = upgrade_penalty > 0;
+
             std::vector<size_t> important_abilities;
 
             for (std::size_t ability_id = 0; ability_id < ABILITY_COUNT; ability_id++)
@@ -290,6 +314,7 @@ namespace mtce
                 charm_compact.original_index = i;
                 charm_compact.charm_power = charm.charm_power;
                 charm_compact.has_upgrade = charm.has_upgrade;
+                charm_compact.is_upgrade = charm.is_upgrade;
                 charm_compact.stat_table.reserve(important_abilities.size());
 
                 bool has_nonzero = false;
@@ -301,7 +326,13 @@ namespace mtce
                     charm_compact.stat_table.push_back((int32_t)(rel_value * ENCODED_CHARM_STAT_SCALE));
                 }
 
-                if (has_nonzero)
+                if (penalty_column)
+                {
+                    charm_compact.stat_table.push_back(charm.is_upgrade ? UPGRADE_PENALTY_COLUMN_VALUE : 0);
+                }
+
+                // a charm costing more than the whole budget can never be used (dropping it also keeps the packed budget in range)
+                if (has_nonzero && charm.charm_power <= max_cp)
                 {
                     compact_dyn_charms.emplace_back(std::move(charm_compact));
                 }
@@ -312,6 +343,10 @@ namespace mtce
             for (const auto ability_id : important_abilities)
             {
                 compact_weights.push_back(weights.at(ability_id));
+            }
+            if (penalty_column)
+            {
+                compact_weights.push_back(-upgrade_penalty * (int32_t)CHARM_COUNT_MAX);
             }
 
             return {
@@ -324,7 +359,7 @@ namespace mtce
 
     auto evaluate_naive(const eval_config& config, const naive_tracing_config& trace) -> eval_result
     {
-        auto [important_abilities, compact_dyn_charms, compact_weights] = prepare_charm_data(config.charms, config.weights);
+        auto [important_abilities, compact_dyn_charms, compact_weights] = prepare_charm_data(config.charms, config.weights, config.max_cp, config.upgrade_penalty);
 
         if (trace.trace_prune)
         {
@@ -349,7 +384,7 @@ namespace mtce
 
         // dynamically select the implementation based on the amount of abilities
         auto [utility, charm_set] =
-            table_helper::TABLE[important_abilities.size()](compact_dyn_charms, config.max_cp, compact_weights, config.threads);
+            table_helper::TABLE[compact_weights.size()](compact_dyn_charms, config.max_cp, config.max_upgrades, compact_weights, config.threads);
 
         // translate static result -> dynamic result
         std::vector<charm_id> ch_res;

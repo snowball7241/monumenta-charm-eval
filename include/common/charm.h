@@ -23,6 +23,7 @@ namespace mtce
         std::string name;
         bool has_upgrade;
         std::array<double, ABILITY_COUNT> charm_data;
+        bool is_upgrade = false; // this is the "(u)" copy: the charm as it would be after upgrading it in game
     };
 
     // no good alternative...

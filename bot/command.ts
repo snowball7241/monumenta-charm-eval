@@ -122,7 +122,7 @@ function splitByNewline(value: string): string[] {
 }
 
 async function doEvaluateCharms(interaction: ChatInputCommandInteraction, userData: UserData, queue: EvalJobRunner, task: UserEvalJob) {
-    const {owner, name, charmDataUrl: url, cp, } = task;
+    const {owner, name, charmDataUrl: url, cp, maxUpgrades, upgradePenalty, } = task;
 
     const config = await tryFetchConfig(interaction, userData, owner, name);
 
@@ -137,6 +137,16 @@ async function doEvaluateCharms(interaction: ChatInputCommandInteraction, userDa
 
     if (cp > 15 || cp < 1) {
         await sendReply(interaction, `Bad value for charm power ${cp}`);
+        return;
+    }
+
+    if (maxUpgrades !== undefined && (maxUpgrades < 0 || maxUpgrades > 7)) {
+        await sendReply(interaction, `Bad value for max upgrades ${maxUpgrades}`);
+        return;
+    }
+
+    if (upgradePenalty !== undefined && (upgradePenalty < 0 || upgradePenalty > 1000000)) {
+        await sendReply(interaction, `Bad value for upgrade penalty ${upgradePenalty}`);
         return;
     }
 
@@ -200,7 +210,7 @@ async function doEvaluateCharms(interaction: ChatInputCommandInteraction, userDa
         return;
     }
 
-    const result = await queue.evaluate(interaction.user.id, task.owner, task.name, config.weights, charms, cp);
+    const result = await queue.evaluate(interaction.user.id, task.owner, task.name, config.weights, charms, cp, {maxUpgrades, upgradePenalty, });
 
     if (!result.success) {
         await sendReply(interaction, result.error);
@@ -264,6 +274,20 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
                 max: 15,
                 required: false,
             },
+            max_upgrades: {
+                type: "integer",
+                description: "Max upgraded (u) charms per set (0 = only charms as they are), default no limit",
+                min: 0,
+                max: 7,
+                required: false,
+            },
+            upgrade_penalty: {
+                type: "integer",
+                description: "Cost of each upgraded charm, as an effect with this weight going 0 to cap (default 0)",
+                min: 0,
+                max: 1000000,
+                required: false,
+            },
             owner: {
                 type: "user",
                 description: "The user that holds the config, by default the sender",
@@ -274,9 +298,11 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
             const name = interaction.options.getString("name", true);
             const charmDataUrl = interaction.options.getAttachment("data", true).url;
             const cp = interaction.options.getInteger("cp") ?? 15;
+            const maxUpgrades = interaction.options.getInteger("max_upgrades") ?? undefined;
+            const upgradePenalty = interaction.options.getInteger("upgrade_penalty") ?? undefined;
             const owner = interaction.options.getUser("owner") ?? interaction.user;
 
-            const job: UserEvalJob = {cp, name, owner: owner.id, charmDataUrl, };
+            const job: UserEvalJob = {cp, name, owner: owner.id, charmDataUrl, maxUpgrades, upgradePenalty, };
 
             userData.setLatestJob(interaction.user.id, job);
             await doEvaluateCharms(interaction, userData, queue, job);
@@ -302,7 +328,9 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
         async executor(interaction, _, queue) {
             function formatTask(task: CharmEvalTask) {
                 const common = `<t:${Math.round(task.creationTime / 1000)}:R> <@${task.creator}>: ` +
-                    `<@${task.configOwner}>:${task.configName}, ${task.charms.length} charms, ${task.cp} charm power`;
+                    `<@${task.configOwner}>:${task.configName}, ${task.charms.length} charms, ${task.cp} charm power` +
+                    (task.upgrades.maxUpgrades !== undefined ? `, max ${task.upgrades.maxUpgrades} upgrades` : "") +
+                    (task.upgrades.upgradePenalty ? `, upgrade penalty ${task.upgrades.upgradePenalty}` : "");
                 if ("startTime" in task && typeof task.startTime === "number") {
                     return `${common} (started <t:${Math.round(task.startTime / 1000)}:R>)`;
                 }
@@ -335,10 +363,12 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
             You can use this to get effect names for making the config; see \`/config create\`
 
             **/evaluate** - Evaluate charms using a config.  
-            Usage: \`/evaluate name:<config> data:<file> [cp:<1-15>] [owner:<user>]\`  
+            Usage: \`/evaluate name:<config> data:<file> [cp:<1-15>] [max_upgrades:<0-7>] [upgrade_penalty:<n>] [owner:<user>]\`  
             - \`name\`: Config name.  
             - \`data\`: Charm data file.  
             - \`cp\`: Charm power (1-15, default 15).  
+            - \`max_upgrades\`: Max upgraded (u) charms in the set (0 = only charms as they are; default no limit).  
+            - \`upgrade_penalty\`: Cost of each upgraded charm, counted like an effect with this weight going from 0 to its cap (default 0).  
             - \`owner\`: Config owner (defaults to you).
             The config should be created by \`/config create\`. The charm data file should be obtained via flowey mod (version 1.8 or above).
             With the mod, you can hover over charms and press \`i\`. After you add all charms, run \`/fma copycharmdata\`, and paste the result into a file.

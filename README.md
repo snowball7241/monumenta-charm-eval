@@ -64,6 +64,9 @@ The configuration file is simple:
 
 ```
 charm_power = 15
+# optional: upgrading charms is expensive in game
+max_upgrades = 2      # at most 2 upgraded "(u)" charms per set (0 = only charms as they are; default: no limit)
+upgrade_penalty = 3   # each upgraded charm costs as much as an effect with weight 3 going from 0 to its cap (default: 0)
 
 [weights]
 # example weights
@@ -75,6 +78,9 @@ volcanic_meteor_radius = 7000
 
 Assign higher weights to more important effects. Avoid specifying weights for effects you don't care about - performance optimizations rely on
 minimizing the number of effects.
+
+`max_upgrades` is a hard limit; `upgrade_penalty` is a soft cost that only lets an upgrade in when it improves the set by more than the
+penalty. They can be combined. Both can also be given on the command line as `--config-max-upgrades` and `--config-upgrade-penalty`.
 
 ### Running
 

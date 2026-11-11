@@ -24,7 +24,13 @@ export interface CharmEvalTask {
     weights: Record<string, string>;
     charms: string[];
     cp: number;
+    upgrades: UpgradeOptions;
     creationTime: number;
+}
+
+export interface UpgradeOptions {
+    maxUpgrades?: number;    // max upgraded "(u)" charms per set; undefined = no limit
+    upgradePenalty?: number; // cost per upgraded charm, in weight units; undefined = 0
 }
 
 export interface RunningTask extends CharmEvalTask {
@@ -43,7 +49,9 @@ async function doTask(task: CharmEvalTask, filePath: string): Promise<EvalResult
 
     const spawnResult = await new Promise<SpawnResult>((resolve) => {
         const args = [
-            "--bot-mode", "--in", filePath, "--naive-threads", getConfig().threads.toString(), "--config-charm-power", task.cp.toString(),
+            "--bot-mode", "--in", filePath, "--algo", "bnb", "--bnb-threads", getConfig().threads.toString(), "--config-charm-power", task.cp.toString(),
+            ...(task.upgrades.maxUpgrades !== undefined ? ["--config-max-upgrades", task.upgrades.maxUpgrades.toString()] : []),
+            ...(task.upgrades.upgradePenalty !== undefined ? ["--config-upgrade-penalty", task.upgrades.upgradePenalty.toString()] : []),
             ...Object.entries(task.weights).flatMap(([k, v]) => [`--weight-${k}`, v.toString()])
         ];
 
@@ -165,7 +173,7 @@ export class EvalJobRunner {
         creator: string,
         configOwner: string,
         configName: string,
-        weights: Record<string, string>, charms: string[], cp: number
+        weights: Record<string, string>, charms: string[], cp: number, upgrades: UpgradeOptions = {}
     ): Promise<EvalResult> {
         return new Promise((resolve) => {
             this.queue.push({
@@ -174,6 +182,7 @@ export class EvalJobRunner {
                 weights,
                 charms,
                 cp,
+                upgrades,
                 creationTime: Date.now(),
             });
         });

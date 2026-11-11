@@ -1,0 +1,6 @@
+{
+    "token": "YOUR_BOT_TOKEN (or set the BOT_TOKEN env var)",
+    "id": "YOUR_APPLICATION_ID (or set the BOT_ID env var)",
+    "threads": 8,
+    "timeout": 300
+}

@@ -17,6 +17,9 @@ export interface UserEvalJob {
     name: string;
     charmDataUrl: string;
     cp: number;
+    // optional so jobs saved before these existed still load; undefined means "no limit" / "no penalty"
+    maxUpgrades?: number;
+    upgradePenalty?: number;
 }
 
 export class UserData {

@@ -18,11 +18,19 @@ namespace mtce
         bool enable_trace;
     };
 
-    using algo_info_t = std::variant<naive_algo_flags>;
+    struct bnb_algo_flags
+    {
+        size_t threads;
+        bool enable_trace;
+    };
+
+    using algo_info_t = std::variant<naive_algo_flags, bnb_algo_flags>;
 
     struct config
     {
         std::uint8_t max_cp = CHARM_POWER_MAX;
+        std::uint32_t max_upgrades = CHARM_COUNT_MAX; // max "(u)" charms per set
+        std::int32_t upgrade_penalty = 0;              // cost per "(u)" charm, in weight units (see upgrade_penalty_to_utility)
         std::unordered_map<std::string, std::int32_t> ability_weights;
 
         [[nodiscard]] constexpr auto to_weights() const -> charm_weights

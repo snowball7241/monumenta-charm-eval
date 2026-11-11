@@ -12,6 +12,7 @@ pch = [
 
 common = [
     'src/common/eval_naive.cpp',
+    'src/common/eval_bnb.cpp',
 ]
 
 cli = [
@@ -53,15 +54,17 @@ if get_option('enable_tests')
     test('gtest tests', mtce_test)
 
     benchmark('naive-single-thread', mtce_cli, args: [
-        '--config', meson.current_source_dir()/'samples/flame.conf', 
+        '--config', meson.current_source_dir()/'samples/flame.conf',
         '--in', meson.current_source_dir()/'samples/sample_charm_dataset.txt',
+        '--algo', 'naive',
         '--naive-threads', '1',
         '--benchmark', benchmark_runs.to_string()
     ])
 
     benchmark('naive-multi-thread', mtce_cli, args: [
-        '--config', meson.current_source_dir()/'samples/flame.conf', 
+        '--config', meson.current_source_dir()/'samples/flame.conf',
         '--in', meson.current_source_dir()/'samples/sample_charm_dataset.txt',
+        '--algo', 'naive',
         '--benchmark', benchmark_runs.to_string()
     ])
 endif

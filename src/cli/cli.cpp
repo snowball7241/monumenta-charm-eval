@@ -34,11 +34,19 @@ namespace mtce
             std::println(out, "  --config, -c [file]      specify configuration file");
             std::println(out, "  --in, -i [file]          specify input file");
             std::println(out, "  --algo [name]            specify the charm evaluation algorithm");
+            std::println(out, "                           available options: bnb (branch and bound, default), naive");
             std::println(out, "  --benchmark [n]          enables benchmarking mode, specifying number of times to run for data");
-            std::println(out, "                           available options: naive");
-            std::println(out, "algorithm specific flags:");
+            std::println(out, "config overrides (same meaning as the config file keys; the last one given wins):");
+            std::println(out, "  --config-charm-power [n]      charm_power: max total charm power (<= {})", CHARM_POWER_MAX);
+            std::println(out, "  --config-max-upgrades [n]     max_upgrades: max upgraded \"(u)\" charms per set (0 = only charms as they are)");
+            std::println(out, "  --config-upgrade-penalty [n]  upgrade_penalty: cost of each upgraded charm, as an effect with weight n going");
+            std::println(out, "                                from 0 to its cap (0 = upgrades are free)");
+            std::println(out, "  --weight-[effect] [n]         set the weight of one effect");
+            std::println(out, "algorithm specific flags (must come after --algo):");
             std::println(out, "  --naive-threads [n]      [naive] specifies the number of threads to use");
             std::println(out, "  --naive-trace            [naive] enables tracing of pruning & other optimizations");
+            std::println(out, "  --bnb-threads [n]        [bnb] specifies the number of threads to use");
+            std::println(out, "  --bnb-trace              [bnb] prints search statistics (sets scored, subtrees pruned)");
         }
 
         auto parse_arg_generic(std::string_view arg, int& idx, int argc, const char* const* argv) -> std::string_view
@@ -135,7 +143,7 @@ namespace mtce
         static constexpr std::string_view CLI_WEIGHT_PREFIX = "--weight-";
 
         cli_options args;
-        args.algo = naive_algo_flags{
+        args.algo = bnb_algo_flags{
             .threads = std::thread::hardware_concurrency(),
         };
 
@@ -169,6 +177,16 @@ namespace mtce
                 check(value <= CHARM_POWER_MAX, "cp must be less than or equal to {}", CHARM_POWER_MAX);
                 args.config.max_cp = value;
             }
+            else if (arg == "--config-max-upgrades")
+            {
+                args.config.max_upgrades = parse_arg_typed<uint32_t>(arg, i, argc, argv);
+            }
+            else if (arg == "--config-upgrade-penalty")
+            {
+                auto value = parse_arg_typed<int32_t>(arg, i, argc, argv);
+                check(value >= 0, "upgrade penalty must be >= 0");
+                args.config.upgrade_penalty = value;
+            }
             else if (arg.starts_with(CLI_WEIGHT_PREFIX))
             {
                 auto name = std::string(arg.substr(CLI_WEIGHT_PREFIX.size()));
@@ -196,6 +214,12 @@ namespace mtce
                         .threads = std::thread::hardware_concurrency(),
                     };
                 }
+                else if (algo_name == "bnb")
+                {
+                    args.algo = bnb_algo_flags{
+                        .threads = std::thread::hardware_concurrency(),
+                    };
+                }
                 else
                 {
                     check(false, "unknown charm evaluation algorithm: {}", algo_name);
@@ -208,6 +232,14 @@ namespace mtce
             else if (arg == "--naive-trace" && std::holds_alternative<naive_algo_flags>(args.algo))
             {
                 std::get<naive_algo_flags>(args.algo).enable_trace = true;
+            }
+            else if (arg == "--bnb-threads" && std::holds_alternative<bnb_algo_flags>(args.algo))
+            {
+                std::get<bnb_algo_flags>(args.algo).threads = parse_arg_typed<uint16_t>(arg, i, argc, argv);
+            }
+            else if (arg == "--bnb-trace" && std::holds_alternative<bnb_algo_flags>(args.algo))
+            {
+                std::get<bnb_algo_flags>(args.algo).enable_trace = true;
             }
             else
             {
@@ -271,6 +303,18 @@ namespace mtce
                     {
                         out.max_cp = read_cfg_int(line_no, value);
                         check(out.max_cp <= CHARM_POWER_MAX, "cp must be less than or equal to {}", CHARM_POWER_MAX);
+                    }
+                    else if (key == "max_upgrades")
+                    {
+                        auto parsed = read_cfg_int(line_no, value);
+                        check(parsed >= 0, "malformed config on line {}: max_upgrades must be >= 0", line_no);
+                        out.max_upgrades = parsed;
+                    }
+                    else if (key == "upgrade_penalty")
+                    {
+                        auto parsed = read_cfg_int(line_no, value);
+                        check(parsed >= 0, "malformed config on line {}: upgrade_penalty must be >= 0", line_no);
+                        out.upgrade_penalty = parsed;
                     }
                     else
                     {
@@ -342,6 +386,7 @@ namespace mtce
                 res.push_back(
                     create_charm(charm_power, COLOR_BY_RARITY.at(rarity + 1), std::string(name) + " (u)", false, effect_ids, parts[5], line_no)
                 );
+                res.back().is_upgrade = true;
             }
         }
 

@@ -65,11 +65,11 @@ function addOptionsToBuilder(
                     .setDescription(option.description)
                     .setRequired(option.required ?? true);
 
-                if (option.min) {
-                    opt.setMaxValue(option.min);
+                if (option.min !== undefined) {
+                    opt.setMinValue(option.min);
                 }
 
-                if (option.max) {
+                if (option.max !== undefined) {
                     opt.setMaxValue(option.max);
                 }
 
