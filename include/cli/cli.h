@@ -22,6 +22,7 @@ namespace mtce
     {
         size_t threads;
         bool enable_trace;
+        bool enable_progress;
     };
 
     using algo_info_t = std::variant<naive_algo_flags, bnb_algo_flags>;
