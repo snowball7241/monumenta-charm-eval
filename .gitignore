@@ -29,4 +29,5 @@ npm-debug.log*
 bot/config.json
 bot/data.json
 bot/audit/
+bot/effects_cache.json
 bot/mtce

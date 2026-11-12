@@ -22,10 +22,12 @@ export interface MtceRunOptions {
 export type Algo = "bnb" | "naive";
 
 // The single place mtce's command line is built, shared by the bot and the replay script so both run the same request.
-export function buildMtceArgs(opts: MtceRunOptions, charmsFile: string, algo: Algo, threads: number): string[] {
+// `progress` asks bnb for "progress <fraction>" lines on stderr (the bot shows them in /queue; replay leaves it off).
+export function buildMtceArgs(opts: MtceRunOptions, charmsFile: string, algo: Algo, threads: number, progress = false): string[] {
     return [
         "--bot-mode", "--in", charmsFile,
         "--algo", algo, `--${algo}-threads`, threads.toString(),
+        ...(progress && algo === "bnb" ? ["--bnb-progress"] : []),
         "--config-charm-power", opts.cp.toString(),
         ...(opts.maxUpgrades !== undefined ? ["--config-max-upgrades", opts.maxUpgrades.toString()] : []),
         ...(opts.upgradePenalty !== undefined ? ["--config-upgrade-penalty", opts.upgradePenalty.toString()] : []),

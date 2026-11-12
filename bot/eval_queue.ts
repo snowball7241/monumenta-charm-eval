@@ -10,6 +10,36 @@ import {appendEvalRecord, buildMtceArgs, mtceIdentity} from "./eval_log";
 
 const MTCE_BINARY = "./mtce";
 const ALGO = "bnb";
+const PROGRESS_INTERVAL_MS = 60 * 1000;
+
+export function fmtElapsed(ms: number): string {
+    const s = Math.floor(ms / 1000);
+    return s < 60 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+// Shared by the console progress lines and /queue so both say the same thing. `user` renders a Discord id
+// (raw id on the console, a mention in Discord).
+export function describeTask(task: CharmEvalTask, user: (id: string) => string = id => id): string {
+    const extras = [
+        `${task.charms.length} charms`, `cp ${task.cp}`,
+        ...(task.upgrades.maxUpgrades !== undefined ? [`max ${task.upgrades.maxUpgrades} upgrades`] : []),
+        ...(task.upgrades.upgradePenalty ? [`upgrade penalty ${task.upgrades.upgradePenalty}`] : [])
+    ];
+    return `${user(task.configOwner)}:${task.configName} for ${user(task.creator)} (${extras.join(", ")})`;
+}
+
+// mtce reports the share of possible charm sets it has dealt with ("searched"). That runs far behind the clock, because bnb spends
+// most of its time on sets of strong charms and dismisses sets of weak charms almost instantly: halfway through a run it is
+// typically at ~15%. Its cube root tracked elapsed time within ~8 percentage points on average on test runs (dawn configs and
+// random ability-focused configs, 1 and 8 threads), so that is what's shown. It is a rough guide, not a promise.
+export function estimatedDone(searched: number): number {
+    return Math.min(0.99, Math.cbrt(Math.max(0, searched)));
+}
+
+export function runningStatus(task: RunningTask, waiting: number, user?: (id: string) => string): string {
+    const done = task.searched !== undefined ? `, ~${Math.round(estimatedDone(task.searched) * 100)}% done` : "";
+    return `still running after ${fmtElapsed(Date.now() - task.startTime)}${done}: ${describeTask(task, user)}, ${waiting} waiting`;
+}
 
 export type EvalResult = {
     success: true;
@@ -41,6 +71,7 @@ export interface UpgradeOptions {
 
 export interface RunningTask extends CharmEvalTask {
     startTime: number;
+    searched?: number; // latest raw progress from mtce, in [0, 1]; see estimatedDone
 }
 
 interface SpawnResult {
@@ -50,11 +81,13 @@ interface SpawnResult {
     stderr: Buffer;
 }
 
-async function doTask(task: CharmEvalTask, filePath: string): Promise<EvalResult> {
+const PROGRESS_LINE = /^progress ([0-9.]+)$/;
+
+async function doTask(task: CharmEvalTask, filePath: string, onProgress: (searched: number) => void): Promise<EvalResult> {
     await writeFile(filePath, task.charms.join("\n"));
 
     const spawnResult = await new Promise<SpawnResult>((resolve) => {
-        const args = buildMtceArgs({weights: task.weights, cp: task.cp, ...task.upgrades, }, filePath, ALGO, getConfig().threads);
+        const args = buildMtceArgs({weights: task.weights, cp: task.cp, ...task.upgrades, }, filePath, ALGO, getConfig().threads, true);
 
         logger.audit("eval_queue.spawn", {args, });
 
@@ -63,7 +96,8 @@ async function doTask(task: CharmEvalTask, filePath: string): Promise<EvalResult
         });
 
         let stdout = Buffer.of();
-        let stderr = Buffer.of();
+        let stderr = Buffer.of();     // everything but progress lines (errors, for the audit log)
+        let stderrPartial = "";       // an incomplete last line, until the rest arrives
 
         proc.addListener("close", (code, signal) => {
             if (code !== null) {
@@ -78,7 +112,25 @@ async function doTask(task: CharmEvalTask, filePath: string): Promise<EvalResult
         });
 
         proc.stdout.on("data", (entry) => stdout = Buffer.concat([stdout, entry]));
-        proc.stderr.on("data", (entry) => stderr = Buffer.concat([stderr, entry]));
+        proc.stderr.on("data", (entry: Buffer) => {
+            const lines = (stderrPartial + entry.toString("utf8")).split("\n");
+            stderrPartial = lines.pop() ?? "";
+            const kept = lines.filter(line => {
+                const match = line.match(PROGRESS_LINE);
+                if (match) {
+                    onProgress(Number(match[1]));
+                }
+                return !match;
+            });
+            if (kept.length > 0) {
+                stderr = Buffer.concat([stderr, Buffer.from(kept.join("\n") + "\n")]);
+            }
+        });
+        proc.stderr.on("end", () => {
+            if (stderrPartial.length > 0 && !PROGRESS_LINE.test(stderrPartial)) {
+                stderr = Buffer.concat([stderr, Buffer.from(stderrPartial)]);
+            }
+        });
     });
 
     const auditLogCommon = {
@@ -158,15 +210,26 @@ export class EvalJobRunner {
     public async begin() {
         while (true) {
             const task = await this.queue.poll();
-            this.currTask = {...task, startTime: Date.now(), };
+            const running: RunningTask = {...task, startTime: Date.now(), };
+            this.currTask = running;
 
             const charmsFile = await createTmpFile();
+            const describe = describeTask(task);
+            const start = performance.now();
+            const elapsed = () => fmtElapsed(performance.now() - start);
+
+            logger.info(`[eval] started ${describe}, ${this.queue.entries().length} waiting`);
+            // progress line once per minute, so a long run is visibly still alive
+            const progress = setInterval(() => {
+                logger.info(`[eval] ${runningStatus(running, this.queue.entries().length)}`);
+            }, PROGRESS_INTERVAL_MS);
 
             try {
                 const startedAt = new Date();
-                const start = performance.now();
-                const result = await doTask(task, charmsFile.path);
+                const result = await doTask(task, charmsFile.path, searched => running.searched = searched);
+                clearInterval(progress);
                 const elapsedMs = Math.round((performance.now() - start) * 10) / 10;
+                logger.info(`[eval] ${result.success ? "finished" : `failed (${result.error})`} after ${elapsed()}: ${describe}`);
 
                 // log before replying, so a request is never answered but missing from the log
                 await appendEvalRecord({
@@ -190,6 +253,7 @@ export class EvalJobRunner {
 
                 task.completionHandler(result);
             } finally {
+                clearInterval(progress);
                 charmsFile.cleanup();
                 this.currTask = undefined;
             }

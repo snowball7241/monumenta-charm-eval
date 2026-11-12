@@ -8,15 +8,13 @@ import {
     User
 } from "discord.js";
 import {UserData, UserEvalJob, UserWeightConfig} from "./data";
-import {CharmEvalTask, EvalJobRunner} from "./eval_queue";
+import {describeTask, EvalJobRunner, fmtElapsed, runningStatus} from "./eval_queue";
 import {ChosenCharm, formatEvalMessage} from "./format";
 import {formatConfigText, parseConfigText} from "./config_text";
 
-const zenithCharmRes = await fetch("https://api.playmonumenta.com/zenith_charm_effects");
-if (!zenithCharmRes.ok) {
-    throw new Error(`Failed to fetch charm effects: ${zenithCharmRes.status} ${zenithCharmRes.statusText}`);
-}
-const zenithCharmJson = await zenithCharmRes.json() as Array<{effectName: string}>;
+import {loadEffectNames} from "./effects";
+
+const effectNames = await loadEffectNames();
 
 export type CommandOption = {
     type: string;
@@ -46,7 +44,7 @@ export function isSubCommandNode(node: SubCommandNode | ExecuteNode): node is Su
     return "children" in node;
 }
 
-const NAME_TO_ID = new Map(zenithCharmJson.map((x, i) => [x.effectName.toLowerCase().replace(/ /g, "_"), i]));
+const NAME_TO_ID = new Map(effectNames.map((name, i) => [name.toLowerCase().replace(/ /g, "_"), i]));
 
 export async function sendReply(interaction: ChatInputCommandInteraction, msg: string) {
     if (interaction.replied) {
@@ -391,25 +389,16 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
         description: "Examines the task queue.",
         options: {},
         async executor(interaction, _, queue) {
-            function formatTask(task: CharmEvalTask) {
-                const common = `<t:${Math.round(task.creationTime / 1000)}:R> <@${task.creator}>: ` +
-                    `<@${task.configOwner}>:${task.configName}, ${task.charms.length} charms, ${task.cp} charm power` +
-                    (task.upgrades.maxUpgrades !== undefined ? `, max ${task.upgrades.maxUpgrades} upgrades` : "") +
-                    (task.upgrades.upgradePenalty ? `, upgrade penalty ${task.upgrades.upgradePenalty}` : "");
-                if ("startTime" in task && typeof task.startTime === "number") {
-                    return `${common} (started <t:${Math.round(task.startTime / 1000)}:R>)`;
-                }
-
-                return common;
-            }
-
+            const mention = (id: string) => `<@${id}>`;
             const currTask = queue.getCurrTask();
+            const waiting = queue.getEntries();
             await sendReply(
                 interaction,
-                (currTask === undefined ?
-                    "No current task" :
-                    `Current task: ${formatTask(currTask)}`) + "\n" +
-                queue.getEntries().map((task, index) => `#${index + 1}: ${formatTask(task)}`).join("\n")
+                [
+                    currTask === undefined ? "No current task" : `Current task: ${runningStatus(currTask, waiting.length, mention)}`,
+                    ...waiting.map((task, index) =>
+                        `#${index + 1}: ${describeTask(task, mention)}, waiting for ${fmtElapsed(Date.now() - task.creationTime)}`)
+                ].join("\n")
             );
         },
     },
