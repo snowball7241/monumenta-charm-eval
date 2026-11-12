@@ -1,8 +1,16 @@
-import assert from "assert";
-import {ChatInputCommandInteraction, User} from "discord.js";
+import {
+    ActionRowBuilder,
+    ChatInputCommandInteraction,
+    ModalBuilder,
+    ModalSubmitInteraction,
+    TextInputBuilder,
+    TextInputStyle,
+    User
+} from "discord.js";
 import {UserData, UserEvalJob, UserWeightConfig} from "./data";
 import {CharmEvalTask, EvalJobRunner} from "./eval_queue";
 import {ChosenCharm, formatEvalMessage} from "./format";
+import {formatConfigText, parseConfigText} from "./config_text";
 
 const zenithCharmRes = await fetch("https://api.playmonumenta.com/zenith_charm_effects");
 if (!zenithCharmRes.ok) {
@@ -66,6 +74,53 @@ export async function sendReply(interaction: ChatInputCommandInteraction, msg: s
     }
 }
 
+// /config import: the modal's custom id carries the target as `config_import:<owner id>:<name>` (custom ids max 100 chars)
+export const CONFIG_IMPORT_PREFIX = "config_import:";
+const CONFIG_IMPORT_FIELD = "config_text";
+const CONFIG_NAME_MAX = 60;
+
+function formatParseErrors(errors: string[]): string {
+    const shown = errors.slice(0, 15);
+    return `Config not saved, please fix:\n${shown.map(e => `- ${e}`).join("\n")}` +
+        (errors.length > shown.length ? `\n- ... and ${errors.length - shown.length} more` : "");
+}
+
+export async function handleConfigImportSubmit(interaction: ModalSubmitInteraction, userData: UserData) {
+    const target = interaction.customId.substring(CONFIG_IMPORT_PREFIX.length);
+    const sep = target.indexOf(":");
+    const ownerId = target.substring(0, sep);
+    const name = target.substring(sep + 1);
+
+    const reply = (content: string) => interaction.reply({content, allowedMentions: {parse: [], }, });
+
+    // the custom id comes from the client, so check everything again
+    if (sep === -1 || !/^\d+$/.test(ownerId) || !/^\w+$/.test(name) || name.length > CONFIG_NAME_MAX) {
+        await reply("Invalid config import.");
+        return;
+    }
+
+    if (interaction.user.id !== ownerId && !userData.isAdmin(interaction.user.id)) {
+        await reply("You do not have permission to create a config to this user!");
+        return;
+    }
+
+    const parsed = parseConfigText(interaction.fields.getTextInputValue(CONFIG_IMPORT_FIELD), x => NAME_TO_ID.has(x));
+
+    if (!parsed.ok) {
+        await reply(formatParseErrors(parsed.errors));
+        return;
+    }
+
+    const replaced = userData.fetchConfig(ownerId, name) !== undefined;
+    userData.createConfig(ownerId, name, parsed.config, true);
+
+    const weights = Object.keys(parsed.config.weights).length;
+    await reply(
+        `${replaced ? "Replaced" : "Created"} config <@${ownerId}>:${name} (${weights} weight${weights === 1 ? "" : "s"}):\n` +
+        "```ini\n" + formatConfigText(parsed.config) + "\n```"
+    );
+}
+
 async function validateConfigName(interaction: ChatInputCommandInteraction, name: string): Promise<boolean> {
     if (!/^\w+$/.test(name)) {
         await sendReply(interaction, `Name ${name} is invalid, must be non-empty and consist only of letters or underscores.`);
@@ -89,6 +144,7 @@ async function validateAndNormalizeConfig(interaction: ChatInputCommandInteracti
     );
 
     return {
+        ...config,
         weights: Object.fromEntries(Object.entries(config.weights).filter(([key]) => NAME_TO_ID.has(key))),
     };
 }
@@ -123,13 +179,18 @@ function splitByNewline(value: string): string[] {
 }
 
 async function doEvaluateCharms(interaction: ChatInputCommandInteraction, userData: UserData, queue: EvalJobRunner, task: UserEvalJob) {
-    const {owner, name, charmDataUrl: url, cp, maxUpgrades, upgradePenalty, } = task;
+    const {owner, name, charmDataUrl: url, } = task;
 
     const config = await tryFetchConfig(interaction, userData, owner, name);
 
     if (config === undefined) {
         return;
     }
+
+    // an explicit /evaluate option wins, then the config's own setting, then the default
+    const cp = task.cp ?? config.settings?.cp ?? 15;
+    const maxUpgrades = task.maxUpgrades ?? config.settings?.maxUpgrades;
+    const upgradePenalty = task.upgradePenalty ?? config.settings?.upgradePenalty;
 
     await interaction.deferReply();
 
@@ -273,7 +334,7 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
             },
             cp: {
                 type: "integer",
-                description: "The charm power",
+                description: "The charm power (default: the config's charm_power, else 15)",
                 min: 1,
                 max: 15,
                 required: false,
@@ -301,7 +362,7 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
         async executor(interaction, userData, queue) {
             const name = interaction.options.getString("name", true);
             const charmDataUrl = interaction.options.getAttachment("data", true).url;
-            const cp = interaction.options.getInteger("cp") ?? 15;
+            const cp = interaction.options.getInteger("cp") ?? undefined;
             const maxUpgrades = interaction.options.getInteger("max_upgrades") ?? undefined;
             const upgradePenalty = interaction.options.getInteger("upgrade_penalty") ?? undefined;
             const owner = interaction.options.getUser("owner") ?? interaction.user;
@@ -370,9 +431,9 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
             Usage: \`/evaluate name:<config> data:<file> [cp:<1-15>] [max_upgrades:<0-7>] [upgrade_penalty:<n>] [owner:<user>]\`  
             - \`name\`: Config name.  
             - \`data\`: Charm data file.  
-            - \`cp\`: Charm power (1-15, default 15).  
-            - \`max_upgrades\`: Max upgraded (u) charms in the set (0 = only charms as they are; default no limit).  
-            - \`upgrade_penalty\`: Cost of each upgraded charm, counted like an effect with this weight going from 0 to its cap (default 0).  
+            - \`cp\`: Charm power (1-15; default: the config's \`charm_power\`, else 15).  
+            - \`max_upgrades\`: Max upgraded (u) charms in the set (0 = only charms as they are; default: the config's max_upgrades, else no limit).  
+            - \`upgrade_penalty\`: Cost of each upgraded charm, counted like an effect with this weight going from 0 to its cap (default: the config's upgrade_penalty, else 0).  
             - \`owner\`: Config owner (defaults to you).
             The config should be created by \`/config create\`. The charm data file should be obtained via flowey mod (version 1.8 or above).
             With the mod, you can hover over charms and press \`i\`. After you add all charms, run \`/fma copycharmdata\`, and paste the result into a file.
@@ -395,9 +456,12 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
               *Requires permission if modifying another user's config.*  
             - **fork**: Copy a config.  
               Usage: \`/config fork target_name:<name> source_name:<name> [target_owner:<user>] [source_owner:<user>]\`  
+            - **import**: Create or replace a config by pasting it into a form.  
+              Usage: \`/config import name:<name> [owner:<user>]\`  
+              *Paste the same text as an mtce .conf file: optional \`charm_power\`, \`max_upgrades\`, \`upgrade_penalty\` lines, then \`[weights]\` and one \`effect = weight\` per line. Comments with #. These settings become the config's defaults for \`/evaluate\`.*  
             - **create**: Create a new config.  
               Usage: \`/config create name:<name> [owner:<user>] [data:<file>]\`  
-              *File format: Each line \`effect=weight\`, comments with #*, names can be obtained via \`/findeffect\`.  
+              *The optional file uses the same format as \`/config import\`; names can be obtained via \`/findeffect\`.*  
             - **list**: List user's configs.  
               Usage: \`/config list [owner:<user>]\`  
             - **edit**: Modify a config's weight.  
@@ -444,21 +508,11 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
                         return;
                     }
 
-                    const entries = Object.entries(config.weights);
-
-                    if (entries.length === 0) {
+                    if (Object.keys(config.weights).length === 0 && config.settings === undefined) {
                         await sendReply(interaction, "Empty config.");
                     } else {
-                        await sendReply(
-                            interaction,
-                            "```\n" + entries.map(([effectId, value]) => {
-                                if (!NAME_TO_ID.has(effectId)) {
-                                    return `:warning: ${effectId} = ${value}`;
-                                } else {
-                                    return `${effectId} = ${value}`;
-                                }
-                            }).join("\n") + "\n```"
-                        );
+                        // same format /config import accepts, so it can be copied, edited and pasted back
+                        await sendReply(interaction, "```ini\n" + formatConfigText(config, x => NAME_TO_ID.has(x)) + "\n```");
                     }
                 },
             },
@@ -581,27 +635,14 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
 
                     if (attachmentUrl !== undefined) {
                         const request = await fetch(attachmentUrl);
-                        const initialConfig = await request.text();
+                        const parsed = parseConfigText(await request.text(), x => NAME_TO_ID.has(x));
 
-                        try {
-                            const data = splitByNewline(initialConfig)
-                                .map(line => {
-                                    const idx = line.indexOf("#");
-                                    return idx === -1 ? line : line.substring(0, idx);
-                                })
-                                .map(line => line.trim())
-                                .filter(line => line.length !== 0)
-                                .map(x => x.split("=", 2))
-                                .map(([k, v]) => {
-                                    assert(validateWeight(v));
-                                    return [k.trim(), v.trim()];
-                                });
-
-                            config = await validateAndNormalizeConfig(interaction, {weights: Object.fromEntries(data), });
-                        } catch {
-                            await sendReply(interaction, "Invalid input file.");
+                        if (!parsed.ok) {
+                            await sendReply(interaction, formatParseErrors(parsed.errors));
                             return;
                         }
+
+                        config = parsed.config;
                     }
 
                     if (interaction.user.id !== owner.id && !userData.isAdmin(interaction.user.id)) {
@@ -611,6 +652,63 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
 
                     userData.createConfig(owner.id, name, await validateAndNormalizeConfig(interaction, config), true);
                     await sendReply(interaction, `Created config ${owner}:${name}.`);
+                },
+            },
+            import: {
+                description: "Create or replace a config by pasting it into a form (charm_power, [weights], ...).",
+                options: {
+                    name: {
+                        type: "string",
+                        description: "The name of the config",
+                    },
+                    owner: {
+                        type: "user",
+                        description: "The user that holds the config, by default the sender",
+                        required: false,
+                    },
+                },
+                async executor(interaction, userData) {
+                    const name = interaction.options.getString("name", true);
+                    const owner = interaction.options.getUser("owner") ?? interaction.user;
+
+                    if (!await validateConfigName(interaction, name)) {
+                        return;
+                    }
+
+                    if (name.length > CONFIG_NAME_MAX) {
+                        await sendReply(interaction, `Name ${name} is too long (max ${CONFIG_NAME_MAX} characters).`);
+                        return;
+                    }
+
+                    if (interaction.user.id !== owner.id && !userData.isAdmin(interaction.user.id)) {
+                        await sendReply(interaction, "You do not have permission to create a config to this user!");
+                        return;
+                    }
+
+                    // prefill with the current config when replacing one, so it can be edited in place
+                    const existing = userData.fetchConfig(owner.id, name);
+
+                    const input = new TextInputBuilder()
+                        .setCustomId(CONFIG_IMPORT_FIELD)
+                        .setLabel("Config (same format as an mtce .conf file)")
+                        .setStyle(TextInputStyle.Paragraph)
+                        .setRequired(true)
+                        .setMaxLength(4000)
+                        .setPlaceholder("charm_power = 15\n[weights]\nfirework_blast_cooldown = 10\nfirework_blast_damage = 10");
+
+                    if (existing !== undefined) {
+                        const current = formatConfigText(existing);
+                        if (current.length <= 4000) {
+                            input.setValue(current);
+                        }
+                    }
+
+                    const modal = new ModalBuilder()
+                        .setCustomId(`${CONFIG_IMPORT_PREFIX}${owner.id}:${name}`)
+                        .setTitle(`${existing !== undefined ? "Replace" : "Create"} config ${name}`.slice(0, 45))
+                        .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+
+                    await interaction.showModal(modal);
                 },
             },
             list: {
@@ -689,12 +787,7 @@ export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {
                     config.weights[effect] = weight;
                     userData.setConfig(owner.id, name, await validateAndNormalizeConfig(interaction, config));
 
-                    await sendReply(
-                        interaction,
-                        "Successfully edited config. New config:\n```" + Object.entries(config.weights)
-                            .map(([effectId, value]) => `${effectId} = ${value}`)
-                            .join("\n") + "\n```"
-                    );
+                    await sendReply(interaction, "Successfully edited config. New config:\n```ini\n" + formatConfigText(config) + "\n```");
                 },
             },
         },

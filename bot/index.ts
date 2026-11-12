@@ -1,6 +1,6 @@
 import {ApplicationCommandOptionType, Client, Events} from "discord.js";
 import {EvalJobRunner} from "./eval_queue";
-import {COMMANDS, isSubCommandNode, sendReply} from "./command";
+import {COMMANDS, CONFIG_IMPORT_PREFIX, handleConfigImportSubmit, isSubCommandNode, sendReply} from "./command";
 import {UserData} from "./data";
 import {getConfig} from "./config";
 import {logger} from "./log";
@@ -23,6 +23,28 @@ queue.begin();
 userData.beginAutoSave("data.json");
 
 client.on(Events.InteractionCreate, async (interaction) => {
+    // /config import opens a form; its submission arrives as a separate modal interaction
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(CONFIG_IMPORT_PREFIX)) {
+        logger.audit("event.modal_submit", {
+            interactionId: interaction.id,
+            channelId: interaction.channelId,
+            guildId: interaction.guildId,
+            senderId: interaction.user.id,
+            customId: interaction.customId,
+            fields: Object.fromEntries(interaction.fields.fields.map(field => [field.customId, "value" in field ? field.value : undefined])),
+        });
+
+        try {
+            await handleConfigImportSubmit(interaction, userData);
+        } catch (error) {
+            logger.error("Error handling config import:", error);
+            if (!interaction.replied) {
+                await interaction.reply({content: "There was an error while importing the config!", allowedMentions: {parse: [], }, });
+            }
+        }
+        return;
+    }
+
     if (!interaction.isChatInputCommand()) {
         return;
     }

@@ -3,8 +3,30 @@ import {writeFileSync} from "fs";
 import {readFile, writeFile} from "fs/promises";
 import {logger} from "./log";
 
+// Per-config defaults for /evaluate (an explicit /evaluate option wins); written as charm_power / max_upgrades /
+// upgrade_penalty in config text.
+export interface ConfigSettings {
+    cp?: number;
+    maxUpgrades?: number;
+    upgradePenalty?: number;
+}
+
 export interface UserWeightConfig {
     weights: Record<string, string>;
+    settings?: ConfigSettings;
+}
+
+function validateSettings(value: unknown): ConfigSettings {
+    assert(value !== null && typeof value === "object");
+    const settings: ConfigSettings = {};
+    for (const key of ["cp", "maxUpgrades", "upgradePenalty"] as const) {
+        if (key in value) {
+            const v = (value as Record<string, unknown>)[key];
+            assert(typeof v === "number" && Number.isInteger(v));
+            settings[key] = v;
+        }
+    }
+    return settings;
 }
 
 function validateUid(uid: unknown): asserts uid is string {
@@ -16,8 +38,9 @@ export interface UserEvalJob {
     owner: string;
     name: string;
     charmDataUrl: string;
-    cp: number;
-    // optional so jobs saved before these existed still load; undefined means "no limit" / "no penalty"
+    // undefined = use the config's setting, else the default (15 charm power, no upgrade limit, no penalty). Optional also so
+    // jobs saved before these existed still load.
+    cp?: number;
     maxUpgrades?: number;
     upgradePenalty?: number;
 }
@@ -45,7 +68,8 @@ export class UserData {
 
         if ("userConfigs" in fileData) {
             assert(Array.isArray(fileData.userConfigs));
-            fileData.userConfigs.forEach(([key, value]) => {
+            // entries are [key, weights] or [key, weights, settings]
+            fileData.userConfigs.forEach(([key, value, settings]) => {
                 assert(typeof key === "string");
                 const [uid, name] = key.split(":", 2);
                 validateUid(uid);
@@ -54,11 +78,13 @@ export class UserData {
 
                 this.createConfig0(uid, name, {
                     weights: Object.fromEntries(Object.entries(value).map(([k, v]) => {
-                        assert(/^\w+$/.test(k));
+                        // effect names can contain apostrophes (e.g. beast's_claw_cooldown)
+                        assert(/^[\w']+$/.test(k));
                         assert(typeof v === "string");
                         BigInt(v); // try parse 
                         return [k, v];
                     })),
+                    ...(settings !== undefined ? {settings: validateSettings(settings), } : {}),
                 });
             });
         }
@@ -79,7 +105,7 @@ export class UserData {
                 assert("owner" in v && typeof v.owner === "string");
                 assert("name" in v && typeof v.owner === "string");
                 assert("charmDataUrl" in v && typeof v.charmDataUrl === "string");
-                assert("cp" in v && typeof v.cp === "number");
+                assert(!("cp" in v) || v.cp === undefined || typeof v.cp === "number");
                 this.lastJob.set(k, v);
             });
         }
@@ -88,7 +114,11 @@ export class UserData {
     private prepareSaveData(): string {
         const flatConfigs = [...this.userConfigs].flatMap(([uid, configs]) =>
             [...configs].map(([name, data]) =>
-                [`${uid}:${name}`, Object.fromEntries(Object.entries(data.weights).map(([effect, weight]) => [effect, weight.toString()]))]
+                [
+                    `${uid}:${name}`,
+                    Object.fromEntries(Object.entries(data.weights).map(([effect, weight]) => [effect, weight.toString()])),
+                    ...(data.settings !== undefined && Object.keys(data.settings).length > 0 ? [data.settings] : [])
+                ]
             )
         );
 
