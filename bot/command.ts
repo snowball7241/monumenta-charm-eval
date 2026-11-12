@@ -2,6 +2,7 @@ import assert from "assert";
 import {ChatInputCommandInteraction, User} from "discord.js";
 import {UserData, UserEvalJob, UserWeightConfig} from "./data";
 import {CharmEvalTask, EvalJobRunner} from "./eval_queue";
+import {ChosenCharm, formatEvalMessage} from "./format";
 
 const zenithCharmRes = await fetch("https://api.playmonumenta.com/zenith_charm_effects");
 if (!zenithCharmRes.ok) {
@@ -217,21 +218,24 @@ async function doEvaluateCharms(interaction: ChatInputCommandInteraction, userDa
         return;
     }
 
-    const names = charms.flatMap(x => {
+    // mtce numbers charms in file order, with an upgradable charm followed by its "(u)" copy (one rarity higher)
+    const entries: ChosenCharm[] = charms.flatMap(x => {
         const parts = x.split(";");
         const name = parts[1];
-        return parts.length === 6 ? [name, `${name} (u)`] : [name];
+        const rarity = parseInt(parts[0]);
+        const charmPower = parseInt(parts[2]);
+        const base = {name, charmPower, rarity, upgraded: false, };
+        return parts.length === 6 ? [base, {name: `${name} (u)`, charmPower, rarity: rarity + 1, upgraded: true, }] : [base];
     });
 
-    await sendReply(
-        interaction,
-        `Weight: ${result.weight}\n` +
-        "```\n" +
-        result.charms.map(x => names[x]).join("\n") + "\n" +
-        "```\n" +
-        "Stats:\n" +
-        "```\n" + result.stats.trim() + "\n```"
-    );
+    await sendReply(interaction, formatEvalMessage({
+        weight: result.weight,
+        charms: result.charms.map(x => entries[x]),
+        maxCp: cp,
+        maxUpgrades,
+        stats: result.stats,
+        statsAnsi: result.statsAnsi,
+    }));
 }
 
 export const COMMANDS: Record<string, SubCommandNode | ExecuteNode> = {

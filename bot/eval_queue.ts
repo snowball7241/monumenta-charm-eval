@@ -10,7 +10,8 @@ export type EvalResult = {
     success: true;
     weight: bigint;
     charms: number[];
-    stats: string;
+    stats: string;      // plain text
+    statsAnsi: string;  // mtce's original colored output (see ansi.ts for Discord rendering)
 } | {
     success: false;
     error: string;
@@ -139,6 +140,7 @@ async function doTask(task: CharmEvalTask, filePath: string): Promise<EvalResult
         return {
             success: true,
             stats: stripVTControlCharacters(parts[1]),
+            statsAnsi: parts[1],
             ...result, 
         };
     } catch {
