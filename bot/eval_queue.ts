@@ -5,6 +5,11 @@ import {file as createTmpFile} from "tmp-promise";
 import {logger} from "./log";
 import {getConfig} from "./config";
 import {stripVTControlCharacters} from "node:util";
+import {performance} from "node:perf_hooks";
+import {appendEvalRecord, buildMtceArgs, mtceIdentity} from "./eval_log";
+
+const MTCE_BINARY = "./mtce";
+const ALGO = "bnb";
 
 export type EvalResult = {
     success: true;
@@ -49,16 +54,11 @@ async function doTask(task: CharmEvalTask, filePath: string): Promise<EvalResult
     await writeFile(filePath, task.charms.join("\n"));
 
     const spawnResult = await new Promise<SpawnResult>((resolve) => {
-        const args = [
-            "--bot-mode", "--in", filePath, "--algo", "bnb", "--bnb-threads", getConfig().threads.toString(), "--config-charm-power", task.cp.toString(),
-            ...(task.upgrades.maxUpgrades !== undefined ? ["--config-max-upgrades", task.upgrades.maxUpgrades.toString()] : []),
-            ...(task.upgrades.upgradePenalty !== undefined ? ["--config-upgrade-penalty", task.upgrades.upgradePenalty.toString()] : []),
-            ...Object.entries(task.weights).flatMap(([k, v]) => [`--weight-${k}`, v.toString()])
-        ];
+        const args = buildMtceArgs({weights: task.weights, cp: task.cp, ...task.upgrades, }, filePath, ALGO, getConfig().threads);
 
         logger.audit("eval_queue.spawn", {args, });
 
-        const proc = spawn("./mtce", args, {
+        const proc = spawn(MTCE_BINARY, args, {
             timeout: getConfig().timeout * 1000,
         });
 
@@ -163,7 +163,32 @@ export class EvalJobRunner {
             const charmsFile = await createTmpFile();
 
             try {
-                task.completionHandler(await doTask(task, charmsFile.path));
+                const startedAt = new Date();
+                const start = performance.now();
+                const result = await doTask(task, charmsFile.path);
+                const elapsedMs = Math.round((performance.now() - start) * 10) / 10;
+
+                // log before replying, so a request is never answered but missing from the log
+                await appendEvalRecord({
+                    v: 1,
+                    time: startedAt.toISOString(),
+                    creator: task.creator,
+                    configOwner: task.configOwner,
+                    configName: task.configName,
+                    weights: task.weights,
+                    cp: task.cp,
+                    ...task.upgrades,
+                    charms: task.charms,
+                    algo: ALGO,
+                    threads: getConfig().threads,
+                    mtce: mtceIdentity(MTCE_BINARY),
+                    elapsedMs,
+                    result: result.success ?
+                        {ok: true, weight: result.weight.toString(), charms: result.charms, } :
+                        {ok: false, error: result.error, },
+                });
+
+                task.completionHandler(result);
             } finally {
                 charmsFile.cleanup();
                 this.currTask = undefined;
