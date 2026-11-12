@@ -4,6 +4,27 @@ A fast Zenith Charm evaluation tool written in C++, optimized for multithreaded 
 
 ## Usage
 
+### Prebuilt binaries
+
+Download the archive for your platform from the [Releases](../../releases) page, extract it, and run `mtce` (`mtce.exe` on Windows)
+as shown under [Running](#running).
+
+| Archive | Runs on |
+|---|---|
+| `macos-arm64` | Apple Silicon Macs, macOS 13.3+ |
+| `macos-x86_64` | Intel Macs, macOS 13.3+ |
+| `linux-x86_64` | any x86_64 Linux with AVX2 (fully static, no dependencies) |
+| `windows-x86_64` | 64-bit Windows with AVX2 (no Visual C++ redistributable needed) |
+
+AVX2 is available on practically every x86 CPU made since ~2015. The binaries are not code-signed: on macOS, clear the download
+quarantine with `xattr -d com.apple.quarantine mtce` (or right-click → Open once); on Windows, choose "More info → Run anyway" if
+SmartScreen warns.
+
+Prebuilt binaries are compiled for a broad CPU baseline, so they are roughly 10-20% slower than a build tuned with `-march=native`.
+The list of charm effects is compiled in: after a Monumenta update that adds or renames effects, use a newer release (or rebuild).
+
+Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed.
+
 ### Building
 
 For best performance, it is strongly recommended to build from source. Modern CPUs support features like AVX, which can significantly improve

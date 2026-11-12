@@ -1,6 +1,7 @@
 # build output (meson build dirs, binaries)
 /build/
-/build-*/
+/build-*
+/dist/
 /bin/
 a.out
 compile_commands.json

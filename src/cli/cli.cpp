@@ -3,6 +3,8 @@
 #include "cli/sv_manip.h"
 #include "common/charm.h"
 #include <array>
+#include <cctype>
+#include <cerrno>
 #include <charconv>
 #include <cstdint>
 #include <cstdlib>
@@ -17,6 +19,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -92,16 +95,45 @@ namespace mtce
         }
 
         template <typename T>
-        constexpr auto read_charm_val(size_t line_no, std::string_view data) -> T
+        auto read_charm_val(size_t line_no, std::string_view data) -> T
         {
-            T res{};
-            auto [ptr, ec] = std::from_chars(data.data(), data.data() + data.size(), res);
-
-            if (ptr != data.data() + data.size() || ec != std::errc{})
-            {
+            const auto fail = [&]() {
                 std::println(std::cerr, "malformed charm data on line {}: failed to parse '{}'", line_no, data);
                 std::exit(-1);
+            };
+
+            T res{};
+
+            if constexpr (std::is_floating_point_v<T>)
+            {
+                // Not std::from_chars: Apple's libc++ only provides the floating-point overload from macOS 26, which would make
+                // release binaries unusable on older macOS. strtof is correctly rounded too, so results are identical.
+                // Keep from_chars' strictness: no leading whitespace or '+', and the whole field must be consumed.
+                if (data.empty() || std::isspace((unsigned char)data.front()) != 0 || data.front() == '+')
+                {
+                    fail();
+                }
+
+                const std::string buffer(data); // strtof needs a NUL-terminated string
+                char* end = nullptr;
+                errno = 0;
+                res = std::strtof(buffer.c_str(), &end);
+
+                if (end != buffer.c_str() + buffer.size() || errno == ERANGE)
+                {
+                    fail();
+                }
             }
+            else
+            {
+                auto [ptr, ec] = std::from_chars(data.data(), data.data() + data.size(), res);
+
+                if (ptr != data.data() + data.size() || ec != std::errc{})
+                {
+                    fail();
+                }
+            }
+
             return res;
         }
 

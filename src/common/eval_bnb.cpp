@@ -202,11 +202,10 @@ namespace mtce
                 charms.push_back(std::move(s));
             }
 
-            // visit order: most promising (root gain per charm power) first
+            // visit order: most promising (root gain per charm power) first. This is only a search-order heuristic (it affects speed,
+            // never the result), so a double is precise enough, and it avoids __int128, which MSVC-targeting compilers lack.
             std::ranges::stable_sort(charms, [](const staged& a, const staged& b) {
-                const auto cpa = std::max<int64_t>(a.cp, 1);
-                const auto cpb = std::max<int64_t>(b.cp, 1);
-                return (__int128)a.root_gain * cpb > (__int128)b.root_gain * cpa;
+                return (double)a.root_gain / std::max<uint32_t>(a.cp, 1) > (double)b.root_gain / std::max<uint32_t>(b.cp, 1);
             });
 
             bnb_problem p;
