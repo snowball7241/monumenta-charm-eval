@@ -45,6 +45,8 @@ export type EvalResult = {
     success: true;
     weight: bigint;
     charms: number[];
+    // false = mtce hit the time limit: this is the best set it found, which may not be optimal
+    complete: boolean;
     stats: string;      // plain text
     statsAnsi: string;  // mtce's original colored output (see ansi.ts for Discord rendering)
 } | {
@@ -79,55 +81,70 @@ interface SpawnResult {
     result: string | number | Error;
     stdout: Buffer;
     stderr: Buffer;
+    complete: boolean;
 }
 
 const PROGRESS_LINE = /^progress ([0-9.]+)$/;
+const INCOMPLETE_LINE = "incomplete";
+// mtce stops itself at the configured timeout and returns its best set; it is only killed if it overruns that by this much
+const KILL_GRACE_SEC = 30;
 
 async function doTask(task: CharmEvalTask, filePath: string, onProgress: (searched: number) => void): Promise<EvalResult> {
     await writeFile(filePath, task.charms.join("\n"));
 
     const spawnResult = await new Promise<SpawnResult>((resolve) => {
-        const args = buildMtceArgs({weights: task.weights, cp: task.cp, ...task.upgrades, }, filePath, ALGO, getConfig().threads, true);
+        const args = buildMtceArgs({weights: task.weights, cp: task.cp, ...task.upgrades, }, filePath, ALGO, getConfig().threads, {
+            progress: true,
+            timeLimitSec: getConfig().timeout,
+        });
 
         logger.audit("eval_queue.spawn", {args, });
 
         const proc = spawn(MTCE_BINARY, args, {
-            timeout: getConfig().timeout * 1000,
+            timeout: (getConfig().timeout + KILL_GRACE_SEC) * 1000,
         });
 
         let stdout = Buffer.of();
         let stderr = Buffer.of();     // everything but progress lines (errors, for the audit log)
-        let stderrPartial = "";       // an incomplete last line, until the rest arrives
+        let stderrPartial = "";       // an unfinished last line, until the rest arrives
+
+        let complete = true;
+        const handleStderrLine = (line: string): boolean => { // true = keep it as error output
+            const match = line.match(PROGRESS_LINE);
+            if (match) {
+                onProgress(Number(match[1]));
+                return false;
+            }
+            if (line === INCOMPLETE_LINE) {
+                complete = false;
+                return false;
+            }
+            return true;
+        };
 
         proc.addListener("close", (code, signal) => {
             if (code !== null) {
-                resolve({success: code === 0, result: code, stdout, stderr, });
+                resolve({success: code === 0, result: code, stdout, stderr, complete, });
             } else if (signal !== null) {
-                resolve({success: false, result: signal, stdout, stderr, });
+                resolve({success: false, result: signal, stdout, stderr, complete, });
             }
         });
 
         proc.addListener("error", error => {
-            resolve({success: false, result: error, stdout, stderr, });
+            resolve({success: false, result: error, stdout, stderr, complete, });
         });
 
         proc.stdout.on("data", (entry) => stdout = Buffer.concat([stdout, entry]));
         proc.stderr.on("data", (entry: Buffer) => {
             const lines = (stderrPartial + entry.toString("utf8")).split("\n");
             stderrPartial = lines.pop() ?? "";
-            const kept = lines.filter(line => {
-                const match = line.match(PROGRESS_LINE);
-                if (match) {
-                    onProgress(Number(match[1]));
-                }
-                return !match;
-            });
+            const kept = lines.filter(handleStderrLine);
             if (kept.length > 0) {
                 stderr = Buffer.concat([stderr, Buffer.from(kept.join("\n") + "\n")]);
             }
         });
         proc.stderr.on("end", () => {
-            if (stderrPartial.length > 0 && !PROGRESS_LINE.test(stderrPartial)) {
+            if (stderrPartial.length > 0 && handleStderrLine(stderrPartial)) {
                 stderr = Buffer.concat([stderr, Buffer.from(stderrPartial)]);
             }
         });
@@ -150,6 +167,7 @@ async function doTask(task: CharmEvalTask, filePath: string, onProgress: (search
             logger.audit("eval_queue.spawn.error.signal", {signal: spawnResult.result, ...auditLogCommon, });
             return {
                 success: false,
+                // mtce normally stops itself at the timeout with a result; a kill means it overran even the grace period
                 error: spawnResult.result === "SIGTERM" ? "Task timed out (try fewer charms?)." : `Signal received: ${spawnResult.result}, please report.`,
             };
         } else {
@@ -185,6 +203,7 @@ async function doTask(task: CharmEvalTask, filePath: string, onProgress: (search
         const result = {
             weight: BigInt(rawLines[0]),
             charms: rawLines.slice(1).map(x => parseInt(x)),
+            complete: spawnResult.complete,
         };
 
         logger.audit("eval_queue.done", {...result, ...auditLogCommon, });
@@ -229,7 +248,8 @@ export class EvalJobRunner {
                 const result = await doTask(task, charmsFile.path, searched => running.searched = searched);
                 clearInterval(progress);
                 const elapsedMs = Math.round((performance.now() - start) * 10) / 10;
-                logger.info(`[eval] ${result.success ? "finished" : `failed (${result.error})`} after ${elapsed()}: ${describe}`);
+                const outcome = !result.success ? `failed (${result.error})` : result.complete ? "finished" : "stopped at the time limit (best set so far)";
+                logger.info(`[eval] ${outcome} after ${elapsed()}: ${describe}`);
 
                 // log before replying, so a request is never answered but missing from the log
                 await appendEvalRecord({
@@ -247,7 +267,7 @@ export class EvalJobRunner {
                     mtce: mtceIdentity(MTCE_BINARY),
                     elapsedMs,
                     result: result.success ?
-                        {ok: true, weight: result.weight.toString(), charms: result.charms, } :
+                        {ok: true, weight: result.weight.toString(), charms: result.charms, ...(result.complete ? {} : {complete: false, }), } :
                         {ok: false, error: result.error, },
                 });
 

@@ -16,6 +16,7 @@ export interface EvalMessageInput {
     maxUpgrades?: number;
     stats: string;      // plain
     statsAnsi: string;  // mtce's colored output
+    note?: string;      // shown above the result, e.g. that the search stopped at the time limit
 }
 
 // The evaluate reply, mirroring the terminal output. Colored (```ansi blocks) when it fits in one Discord message; otherwise
@@ -29,6 +30,7 @@ export function formatEvalMessage(input: EvalMessageInput): string {
         `Upgrades used: ${upgradesUsed}${input.maxUpgrades !== undefined ? `/${input.maxUpgrades}` : ""}\n`;
 
     const build = (colored: boolean, statsLines: string[], omitted: number) =>
+        (input.note !== undefined ? `${input.note}\n` : "") +
         `Weight: ${input.weight}\n` +
         (colored ? "```ansi\n" : "```\n") +
         input.charms.map(c => {

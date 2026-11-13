@@ -22,12 +22,19 @@ export interface MtceRunOptions {
 export type Algo = "bnb" | "naive";
 
 // The single place mtce's command line is built, shared by the bot and the replay script so both run the same request.
-// `progress` asks bnb for "progress <fraction>" lines on stderr (the bot shows them in /queue; replay leaves it off).
-export function buildMtceArgs(opts: MtceRunOptions, charmsFile: string, algo: Algo, threads: number, progress = false): string[] {
+// Bot-only extras, which replay leaves off: `progress` asks bnb for "progress <fraction>" lines on stderr (shown in /queue);
+// `timeLimitSec` makes bnb stop after that long with the best set found so far (an "incomplete" line on stderr).
+export interface MtceExtras {
+    progress?: boolean;
+    timeLimitSec?: number;
+}
+
+export function buildMtceArgs(opts: MtceRunOptions, charmsFile: string, algo: Algo, threads: number, extras: MtceExtras = {}): string[] {
     return [
         "--bot-mode", "--in", charmsFile,
         "--algo", algo, `--${algo}-threads`, threads.toString(),
-        ...(progress && algo === "bnb" ? ["--bnb-progress"] : []),
+        ...(extras.progress && algo === "bnb" ? ["--bnb-progress"] : []),
+        ...(extras.timeLimitSec !== undefined && algo === "bnb" ? ["--bnb-time-limit", extras.timeLimitSec.toString()] : []),
         "--config-charm-power", opts.cp.toString(),
         ...(opts.maxUpgrades !== undefined ? ["--config-max-upgrades", opts.maxUpgrades.toString()] : []),
         ...(opts.upgradePenalty !== undefined ? ["--config-upgrade-penalty", opts.upgradePenalty.toString()] : []),
@@ -74,7 +81,8 @@ export interface EvalLogRecord extends MtceRunOptions {
     mtce: MtceIdentity;
     elapsedMs: number;      // wall time of the mtce process
     result:
-        | {ok: true; weight: string; charms: number[]}
+        // complete: false = stopped at the time limit, so `weight` may be below the optimum (absent in records before this existed)
+        | {ok: true; weight: string; charms: number[]; complete?: boolean}
         | {ok: false; error: string};
 }
 

@@ -141,7 +141,9 @@ function main() {
             const okUtilities = [...runs.values()].filter(r => r.status === "ok").map(r => (r as {utility: bigint}).utility);
             const agree = okUtilities.every(u => u === okUtilities[0]);
             const logged = record.result.ok ? BigInt(record.result.weight) : undefined;
-            const matchesLog = logged === undefined || okUtilities.length === 0 || okUtilities[0] === logged;
+            // a result logged as incomplete (bot time limit) may be below the optimum, so it can't be compared
+            const loggedComplete = record.result.ok && record.result.complete !== false;
+            const matchesLog = logged === undefined || !loggedComplete || okUtilities.length === 0 || okUtilities[0] === logged;
 
             if (!agree) mismatches++;
             if (!matchesLog) logDrift++;
@@ -167,7 +169,7 @@ function main() {
                 `#${i + 1} ${record.time.slice(0, 16).replace("T", " ")} ${record.configName} | ${record.charms.length} charm lines, ` +
                 `${Object.keys(record.weights).length} weights, cp ${record.cp}${upgrades ? ", " + upgrades : ""}\n` +
                 opts.algos.map(a => `    ${a.padEnd(5)} ${fmtRun(runs.get(a)).padEnd(24)} ${runs.get(a)?.status === "ok" ? (runs.get(a) as {utility: bigint}).utility : ""}`).join("\n") +
-                `\n    logged ${record.result.ok ? `${fmtMs(record.elapsedMs)} (${record.algo})`.padEnd(24) + " " + record.result.weight : "error: " + record.result.error}` +
+                `\n    logged ${record.result.ok ? `${fmtMs(record.elapsedMs)} (${record.algo})`.padEnd(24) + " " + record.result.weight + (loggedComplete ? "" : " (incomplete: hit the bot's time limit)") : "error: " + record.result.error}` +
                 `\n    => ${verdict}${speedup ? `, bnb ${speedup} faster` : ""}\n`
             );
 

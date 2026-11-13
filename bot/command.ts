@@ -11,6 +11,7 @@ import {UserData, UserEvalJob, UserWeightConfig} from "./data";
 import {describeTask, EvalJobRunner, fmtElapsed, runningStatus} from "./eval_queue";
 import {ChosenCharm, formatEvalMessage} from "./format";
 import {formatConfigText, parseConfigText} from "./config_text";
+import {getConfig} from "./config";
 
 import {loadEffectNames} from "./effects";
 
@@ -288,6 +289,8 @@ async function doEvaluateCharms(interaction: ChatInputCommandInteraction, userDa
     });
 
     await sendReply(interaction, formatEvalMessage({
+        note: result.complete ? undefined :
+            `:warning: **Timed out after ${fmtElapsed(getConfig().timeout * 1000)}.** This is the best build found so far and might not be optimal.`,
         weight: result.weight,
         charms: result.charms.map(x => entries[x]),
         maxCp: cp,
