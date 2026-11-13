@@ -64,12 +64,6 @@ namespace mtce
     struct bnb_tracing_config
     {
         std::function<void(const bnb_stats& stats)> trace_stats;
-
-        // Called every `progress_interval` while the search runs (from a separate thread), with the fraction of the search space
-        // finished so far, in [0, 1]. The space is every set of up to 7 charms; a pruned subtree counts as finished all at once, so
-        // this is a rough measure: it says how much is left, not how long that will take.
-        std::function<void(double fraction)> progress;
-        std::chrono::milliseconds progress_interval{1000};
     };
 
     struct bnb_limits

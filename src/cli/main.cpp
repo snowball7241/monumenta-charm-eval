@@ -227,12 +227,6 @@ namespace
                 trace.trace_stats = algo_invoker::bnb_trace_stats;
             }
 
-            if (flags.enable_progress)
-            {
-                // stderr, one line each, so a caller can read progress without it mixing into the result on stdout
-                trace.progress = [](double fraction) { std::println(std::cerr, "progress {:.6f}", fraction); };
-            }
-
             return evaluate_bnb(
                 {
                     .charms = charms,

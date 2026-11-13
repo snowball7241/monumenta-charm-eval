@@ -22,7 +22,6 @@ namespace mtce
     {
         size_t threads;
         bool enable_trace;
-        bool enable_progress;
         uint32_t time_limit_seconds; // 0 = none
     };
 

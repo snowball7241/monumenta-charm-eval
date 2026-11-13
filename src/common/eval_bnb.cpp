@@ -6,7 +6,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <condition_variable>
 #include <mutex>
 #include <cstddef>
@@ -233,72 +232,21 @@ namespace mtce
             return p;
         }
 
-        // Progress: the share of the search space (every non-empty set of at most CHARM_COUNT_MAX of the n candidates) that is
-        // finished. A node whose set has `size` charms and whose next candidate is at `start` owns every set that extends it:
-        // itself plus up to (CHARM_COUNT_MAX - size) more charms from the m = n - start after it, sum_{j=0..k} C(m, j) sets.
-        // Root jobs own disjoint sets that together cover the whole space, and so do a node's children together with the node.
-        //
-        // Only nodes of at most PROGRESS_DEPTH charms are counted, when they finish: a node credits its whole weight minus what
-        // its counted children already credited, which also covers the children it skipped or pruned. That is a few thousand
-        // counts per second at most, so it costs nothing measurable. Weights are fixed-point fractions of the space.
-        constexpr std::size_t PROGRESS_DEPTH = 3;
+        // time limit: checked only near the top of the search, where a node's subtree can be large; below that each one finishes
+        // in milliseconds anyway
         constexpr std::size_t STOP_CHECK_DEPTH = 4;
-        constexpr double PROGRESS_ONE = 4503599627370496.0; // 2^52 units = the whole space
-
-        class progress_weights
-        {
-            std::vector<std::array<int64_t, CHARM_COUNT_MAX + 1>> table; // [m][k] = sum_{j=0..k} C(m, j), in units
-
-        public:
-            explicit progress_weights(std::size_t n) : table(n + 1)
-            {
-                std::vector<std::array<double, CHARM_COUNT_MAX + 1>> sets(n + 1);
-                for (std::size_t m = 0; m <= n; m++)
-                {
-                    double choose = 1; // C(m, j)
-                    double sum = 0;
-                    for (std::size_t j = 0; j <= CHARM_COUNT_MAX; j++)
-                    {
-                        if (j > 0)
-                        {
-                            choose = j <= m ? choose * (double)(m - j + 1) / (double)j : 0;
-                        }
-                        sum += choose;
-                        sets[m][j] = sum;
-                    }
-                }
-
-                const double space = sets[n][CHARM_COUNT_MAX] - 1; // every set but the empty one
-                for (std::size_t m = 0; m <= n; m++)
-                {
-                    for (std::size_t k = 0; k <= CHARM_COUNT_MAX; k++)
-                    {
-                        table[m][k] = space > 0 ? (int64_t)std::llround(sets[m][k] / space * PROGRESS_ONE) : 0;
-                    }
-                }
-            }
-
-            // the sets owned by a node with `size` charms whose remaining candidates start at `start`
-            [[nodiscard]] auto node(std::size_t n, std::size_t start, std::size_t size) const -> int64_t
-            {
-                return table[n - start][CHARM_COUNT_MAX - size];
-            }
-        };
 
         struct shared_state
         {
             std::atomic<int64_t> best{0}; // the empty set scores 0, matching `naive`
             std::atomic<std::size_t> next_job{0};
-            std::atomic<int64_t> progress{0}; // finished part of the search space, in PROGRESS_ONE units
-            std::atomic<bool> stop{false};    // set at the time limit: every worker unwinds and keeps its best set so far
+            std::atomic<bool> stop{false}; // set at the time limit: every worker unwinds and keeps its best set so far
         };
 
         struct worker
         {
             const bnb_problem& p;
             shared_state& shared;
-            const progress_weights& weights;
-            int64_t credited = 0; // progress this worker has added to shared.progress
 
             int64_t best_utility = -1;
             std::array<std::size_t, CHARM_COUNT_MAX> best_set{};
@@ -323,7 +271,7 @@ namespace mtce
 
             bnb_stats stats{};
 
-            worker(const bnb_problem& prob, shared_state& sh, const progress_weights& w) : p(prob), shared(sh), weights(w), totals(p.d, 0)
+            worker(const bnb_problem& prob, shared_state& sh) : p(prob), shared(sh), totals(p.d, 0)
             {
                 candidates.reserve(p.n);
                 gain_buf.reserve(p.n);
@@ -412,38 +360,14 @@ namespace mtce
                 return dp[slots][cp_left];
             }
 
-            void credit(int64_t units)
-            {
-                if (units > 0) // rounding can leave a parent a unit or two short of its children
-                {
-                    credited += units;
-                    shared.progress.fetch_add(units, std::memory_order_relaxed);
-                }
-            }
-
+            // the current set's totals are in `totals`; `start` is the first candidate position
             void search(int64_t utility, uint32_t curr_cp, std::size_t start)
             {
-                // time limit: checked only near the top, where a node's subtree can be large; below that each one finishes in
-                // milliseconds anyway
                 if (size <= STOP_CHECK_DEPTH && shared.stop.load(std::memory_order_relaxed))
                 {
                     return;
                 }
 
-                if (size > PROGRESS_DEPTH)
-                {
-                    search_node(utility, curr_cp, start);
-                    return;
-                }
-
-                const auto before = credited;
-                search_node(utility, curr_cp, start);
-                credit(weights.node(p.n, start, size) - (credited - before));
-            }
-
-            // the current set's totals are in `totals`; `start` is the first candidate position
-            void search_node(int64_t utility, uint32_t curr_cp, std::size_t start)
-            {
                 stats.visited++;
                 record(utility);
 
@@ -537,7 +461,6 @@ namespace mtce
 
                     if (!allowed(first, 0))
                     {
-                        credit(weights.node(p.n, first + 1, 1));
                         continue;
                     }
 
@@ -553,7 +476,6 @@ namespace mtce
     auto evaluate_bnb(const eval_config& config, const bnb_tracing_config& trace, const bnb_limits& limits) -> eval_result
     {
         const auto problem = prepare(config);
-        const progress_weights weights(problem.n);
         shared_state shared;
 
         const auto n_threads = std::max<std::size_t>(config.threads, 1);
@@ -561,51 +483,23 @@ namespace mtce
         workers.reserve(n_threads);
         for (std::size_t t = 0; t < n_threads; t++)
         {
-            workers.emplace_back(problem, shared, weights);
+            workers.emplace_back(problem, shared);
         }
 
-        // monitor thread: reports progress every interval and enforces the time limit, until the search is done
-        using clock = std::chrono::steady_clock;
-        const bool has_limit = limits.time_limit.count() > 0;
-        const auto deadline = clock::now() + limits.time_limit;
-        std::mutex reporter_mutex;
-        std::condition_variable reporter_wake;
+        // time limit: a timer thread sets `stop` at the deadline, unless the search finishes first
+        std::mutex timer_mutex;
+        std::condition_variable timer_wake;
         bool search_done = false;
-        std::thread reporter;
-        if (trace.progress || has_limit)
+        std::thread timer;
+        if (limits.time_limit.count() > 0)
         {
-            reporter = std::thread([&]() {
-                std::unique_lock lock(reporter_mutex);
-                auto next_report = clock::now() + trace.progress_interval;
-                while (true)
+            const auto deadline = std::chrono::steady_clock::now() + limits.time_limit;
+            // `deadline` by value: it goes out of scope at the end of this block, while the thread keeps running
+            timer = std::thread([&, deadline]() {
+                std::unique_lock lock(timer_mutex);
+                if (!timer_wake.wait_until(lock, deadline, [&]() { return search_done; }))
                 {
-                    auto wake = clock::time_point::max();
-                    if (trace.progress)
-                    {
-                        wake = next_report;
-                    }
-                    if (has_limit && !shared.stop.load())
-                    {
-                        wake = std::min(wake, deadline);
-                    }
-                    if (reporter_wake.wait_until(lock, wake, [&]() { return search_done; }))
-                    {
-                        return;
-                    }
-
-                    const auto now = clock::now();
-                    if (has_limit && now >= deadline)
-                    {
-                        shared.stop.store(true);
-                    }
-                    if (trace.progress && now >= next_report)
-                    {
-                        if (!shared.stop.load()) // after a stop the count no longer means anything
-                        {
-                            trace.progress(std::clamp((double)shared.progress.load(std::memory_order_relaxed) / PROGRESS_ONE, 0.0, 1.0));
-                        }
-                        next_report = now + trace.progress_interval;
-                    }
+                    shared.stop.store(true);
                 }
             });
         }
@@ -628,14 +522,14 @@ namespace mtce
             }
         }
 
-        if (reporter.joinable())
+        if (timer.joinable())
         {
             {
-                const std::scoped_lock lock(reporter_mutex);
+                const std::scoped_lock lock(timer_mutex);
                 search_done = true;
             }
-            reporter_wake.notify_one();
-            reporter.join();
+            timer_wake.notify_one();
+            timer.join();
         }
 
         // the empty set (utility 0) is the fallback, as in `naive`

@@ -50,7 +50,6 @@ namespace mtce
             std::println(out, "  --naive-trace            [naive] enables tracing of pruning & other optimizations");
             std::println(out, "  --bnb-threads [n]        [bnb] specifies the number of threads to use");
             std::println(out, "  --bnb-trace              [bnb] prints search statistics (sets scored, subtrees pruned)");
-            std::println(out, "  --bnb-progress           [bnb] prints \"progress <fraction>\" lines to stderr every second while searching");
             std::println(out, "  --bnb-time-limit [s]     [bnb] stops after s seconds with the best set found so far, which may not be");
             std::println(out, "                           optimal (bot mode: an \"incomplete\" line on stderr)");
         }
@@ -275,10 +274,6 @@ namespace mtce
             else if (arg == "--bnb-trace" && std::holds_alternative<bnb_algo_flags>(args.algo))
             {
                 std::get<bnb_algo_flags>(args.algo).enable_trace = true;
-            }
-            else if (arg == "--bnb-progress" && std::holds_alternative<bnb_algo_flags>(args.algo))
-            {
-                std::get<bnb_algo_flags>(args.algo).enable_progress = true;
             }
             else if (arg == "--bnb-time-limit" && std::holds_alternative<bnb_algo_flags>(args.algo))
             {
