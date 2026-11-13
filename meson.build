@@ -1,6 +1,6 @@
 project('mtce', 'c', 'cpp', 
     default_options : ['c_std=c11', 'cpp_std=c++23'], 
-    version: '1.1.0'
+    version: '1.1.1'
 )
 
 cmake = import('cmake')
