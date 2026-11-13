@@ -242,6 +242,7 @@ namespace mtce
         // its counted children already credited, which also covers the children it skipped or pruned. That is a few thousand
         // counts per second at most, so it costs nothing measurable. Weights are fixed-point fractions of the space.
         constexpr std::size_t PROGRESS_DEPTH = 3;
+        constexpr std::size_t STOP_CHECK_DEPTH = 4;
         constexpr double PROGRESS_ONE = 4503599627370496.0; // 2^52 units = the whole space
 
         class progress_weights
@@ -289,6 +290,7 @@ namespace mtce
             std::atomic<int64_t> best{0}; // the empty set scores 0, matching `naive`
             std::atomic<std::size_t> next_job{0};
             std::atomic<int64_t> progress{0}; // finished part of the search space, in PROGRESS_ONE units
+            std::atomic<bool> stop{false};    // set at the time limit: every worker unwinds and keeps its best set so far
         };
 
         struct worker
@@ -421,6 +423,13 @@ namespace mtce
 
             void search(int64_t utility, uint32_t curr_cp, std::size_t start)
             {
+                // time limit: checked only near the top, where a node's subtree can be large; below that each one finishes in
+                // milliseconds anyway
+                if (size <= STOP_CHECK_DEPTH && shared.stop.load(std::memory_order_relaxed))
+                {
+                    return;
+                }
+
                 if (size > PROGRESS_DEPTH)
                 {
                     search_node(utility, curr_cp, start);
@@ -521,7 +530,7 @@ namespace mtce
                 while (true)
                 {
                     const auto first = shared.next_job.fetch_add(1, std::memory_order_relaxed);
-                    if (first >= p.n)
+                    if (first >= p.n || shared.stop.load(std::memory_order_relaxed))
                     {
                         return;
                     }
@@ -541,7 +550,7 @@ namespace mtce
         };
     } // namespace
 
-    auto evaluate_bnb(const eval_config& config, const bnb_tracing_config& trace) -> eval_result
+    auto evaluate_bnb(const eval_config& config, const bnb_tracing_config& trace, const bnb_limits& limits) -> eval_result
     {
         const auto problem = prepare(config);
         const progress_weights weights(problem.n);
@@ -555,18 +564,48 @@ namespace mtce
             workers.emplace_back(problem, shared, weights);
         }
 
-        // progress reporter: wakes every interval until the search is done
+        // monitor thread: reports progress every interval and enforces the time limit, until the search is done
+        using clock = std::chrono::steady_clock;
+        const bool has_limit = limits.time_limit.count() > 0;
+        const auto deadline = clock::now() + limits.time_limit;
         std::mutex reporter_mutex;
         std::condition_variable reporter_wake;
         bool search_done = false;
         std::thread reporter;
-        if (trace.progress)
+        if (trace.progress || has_limit)
         {
             reporter = std::thread([&]() {
                 std::unique_lock lock(reporter_mutex);
-                while (!reporter_wake.wait_for(lock, trace.progress_interval, [&]() { return search_done; }))
+                auto next_report = clock::now() + trace.progress_interval;
+                while (true)
                 {
-                    trace.progress(std::clamp((double)shared.progress.load(std::memory_order_relaxed) / PROGRESS_ONE, 0.0, 1.0));
+                    auto wake = clock::time_point::max();
+                    if (trace.progress)
+                    {
+                        wake = next_report;
+                    }
+                    if (has_limit && !shared.stop.load())
+                    {
+                        wake = std::min(wake, deadline);
+                    }
+                    if (reporter_wake.wait_until(lock, wake, [&]() { return search_done; }))
+                    {
+                        return;
+                    }
+
+                    const auto now = clock::now();
+                    if (has_limit && now >= deadline)
+                    {
+                        shared.stop.store(true);
+                    }
+                    if (trace.progress && now >= next_report)
+                    {
+                        if (!shared.stop.load()) // after a stop the count no longer means anything
+                        {
+                            trace.progress(std::clamp((double)shared.progress.load(std::memory_order_relaxed) / PROGRESS_ONE, 0.0, 1.0));
+                        }
+                        next_report = now + trace.progress_interval;
+                    }
                 }
             });
         }
@@ -621,7 +660,7 @@ namespace mtce
             trace.trace_stats(total);
         }
 
-        eval_result result{.utility_value = best_utility, .charms = {}};
+        eval_result result{.utility_value = best_utility, .charms = {}, .complete = !shared.stop.load()};
         if (best != nullptr)
         {
             for (std::size_t k = 0; k < best->best_size; k++)

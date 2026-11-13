@@ -41,6 +41,8 @@ namespace mtce
     {
         int64_t utility_value;
         std::vector<charm_id> charms;
+        // false if the search stopped early (bnb's time limit): `charms` is then the best set found so far, which may not be optimal
+        bool complete = true;
     };
 
     struct naive_tracing_config 
@@ -70,5 +72,11 @@ namespace mtce
         std::chrono::milliseconds progress_interval{1000};
     };
 
-    auto evaluate_bnb(const eval_config& config, const bnb_tracing_config& trace = {}) -> eval_result;
+    struct bnb_limits
+    {
+        // stop searching after this long and return the best set found so far (eval_result::complete = false); 0 = no limit
+        std::chrono::milliseconds time_limit{0};
+    };
+
+    auto evaluate_bnb(const eval_config& config, const bnb_tracing_config& trace = {}, const bnb_limits& limits = {}) -> eval_result;
 } // namespace mtce

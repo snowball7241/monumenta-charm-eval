@@ -119,7 +119,15 @@ namespace
     {
         // dump data
         // warning - this algo is ugly
-        std::println(std::cout, "Optimal charm set (" green("{}") "): ", result.utility_value);
+        if (result.complete)
+        {
+            std::println(std::cout, "Optimal charm set (" green("{}") "): ", result.utility_value);
+        }
+        else
+        {
+            std::println(std::cout, yellow("Time limit reached: this is the best set found so far, and it may not be optimal."));
+            std::println(std::cout, "Best charm set found (" green("{}") "): ", result.utility_value);
+        }
         std::uint32_t curr_cp = 0;
         std::uint32_t upgrades = 0;
 
@@ -234,7 +242,8 @@ namespace
                     .max_upgrades = config.max_upgrades,
                     .upgrade_penalty = config.upgrade_penalty,
                 },
-                trace
+                trace,
+                {.time_limit = std::chrono::seconds(flags.time_limit_seconds)}
             );
         }
     };
@@ -265,6 +274,10 @@ auto main(int argc, const char* const* argv) -> int
     if (bot_mode)
     {
         auto [time, result] = run_profiled();
+        if (!result.complete)
+        {
+            std::println(std::cerr, "incomplete");
+        }
         std::println(std::cout, "{}", result.utility_value);
 
         for (auto charm_id : result.charms)
