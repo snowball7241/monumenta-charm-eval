@@ -54,8 +54,10 @@ linux-x86_64)
     setup_args+=(-Dcpp_args="-march=x86-64-v3" -Dcpp_link_args="-static")
     ;;
 windows-x86_64)
-    # clang's GNU-style driver targeting MSVC: link the C/C++ runtime statically
-    setup_args+=(-Dcpp_args="-march=x86-64-v3 -fms-runtime-lib=static" -Dcpp_link_args="-fms-runtime-lib=static")
+    # clang's GNU-style driver targeting MSVC: link the C/C++ runtime statically. Through meson's b_vscrt, not raw
+    # -fms-runtime-lib flags: meson adds its own runtime flags (-fms-runtime-lib=dll, /nodefaultlib:libcmt) that would
+    # contradict them and leave the program without a CRT entry point
+    setup_args+=(-Db_vscrt=mt -Dcpp_args="-march=x86-64-v3")
     exe=mtce.exe
     ;;
 *)
