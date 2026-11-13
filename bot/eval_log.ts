@@ -22,17 +22,23 @@ export interface MtceRunOptions {
 export type Algo = "bnb" | "naive";
 
 // The single place mtce's command line is built, shared by the bot and the replay script so both run the same request.
-// Extras the bot and web front end use and replay leaves off: `timeLimitSec` makes bnb stop after that long with the best set
-// found so far (an "incomplete" line on stderr).
+// Extras the bot and web front end use and replay leaves off:
+// - timeLimitSec: bnb stops after that long with the best set found so far (an "incomplete" line on stderr)
+// - trace: --bnb-trace / --naive-trace (search statistics, on stderr in bot mode)
+// - benchmarkRuns: --benchmark n instead of --bot-mode (mtce's own timing output on stdout, no result)
 export interface MtceExtras {
     timeLimitSec?: number;
+    trace?: boolean;
+    benchmarkRuns?: number;
 }
 
 export function buildMtceArgs(opts: MtceRunOptions, charmsFile: string, algo: Algo, threads: number, extras: MtceExtras = {}): string[] {
     return [
-        "--bot-mode", "--in", charmsFile,
+        ...(extras.benchmarkRuns !== undefined ? ["--benchmark", extras.benchmarkRuns.toString()] : ["--bot-mode"]),
+        "--in", charmsFile,
         "--algo", algo, `--${algo}-threads`, threads.toString(),
         ...(extras.timeLimitSec !== undefined && algo === "bnb" ? ["--bnb-time-limit", extras.timeLimitSec.toString()] : []),
+        ...(extras.trace ? [`--${algo}-trace`] : []),
         "--config-charm-power", opts.cp.toString(),
         ...(opts.maxUpgrades !== undefined ? ["--config-max-upgrades", opts.maxUpgrades.toString()] : []),
         ...(opts.upgradePenalty !== undefined ? ["--config-upgrade-penalty", opts.upgradePenalty.toString()] : []),

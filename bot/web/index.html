@@ -92,15 +92,38 @@ label.button input { position: absolute; opacity: 0; width: 0; height: 0; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
 button:disabled { opacity: 0.5; cursor: default; }
 .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 16px 0; }
-.controls label.limit { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
-.controls input[type="number"] {
-    width: 90px;
+.options { margin-top: 16px; }
+.options > summary { cursor: pointer; font-weight: 600; font-size: 15px; }
+.options[open] > summary { margin-bottom: 12px; }
+.options-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px 18px; }
+.field { min-width: 0; }
+.field > label, .field > .label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.field input[type="number"], .field select {
+    width: 100%;
     font: inherit;
+    font-size: 14px;
     padding: 5px 8px;
     border-radius: 6px;
     border: 1px solid var(--border);
     background: var(--input-bg);
     color: var(--text);
+}
+.field input:disabled { opacity: 0.5; }
+.flag { display: block; margin-top: 3px; color: var(--muted); font: 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; padding: 5px 0; cursor: pointer; }
+.toggle input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+.command-row { margin-top: 14px; font-size: 13px; color: var(--muted); }
+.command {
+    display: block;
+    margin-top: 4px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--input-bg);
+    color: var(--text);
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow-wrap: anywhere;
+    user-select: all;
 }
 .status { display: none; margin-bottom: 16px; }
 .status.visible { display: block; }
@@ -176,12 +199,59 @@ rarity;name;charm power;effect:effect;value:value[;upgraded values]"></textarea>
         </section>
     </div>
 
+    <details class="card options" id="options" open>
+        <summary>Options</summary>
+        <div class="options-grid">
+            <div class="field">
+                <label for="opt-algo">Algorithm</label>
+                <select id="opt-algo">
+                    <option value="bnb">bnb (branch and bound)</option>
+                    <option value="naive">naive (brute force)</option>
+                </select>
+                <span class="flag">--algo</span>
+            </div>
+            <div class="field">
+                <label for="opt-threads">Threads</label>
+                <input type="number" id="opt-threads" min="1" max="1024" step="1" placeholder="all cores">
+                <span class="flag" id="flag-threads">--bnb-threads</span>
+            </div>
+            <div class="field">
+                <label for="opt-time-limit">Time limit (seconds)</label>
+                <input type="number" id="opt-time-limit" min="0" max="86400" step="1" value="300" placeholder="none">
+                <span class="flag" id="flag-time-limit">--bnb-time-limit · 0 = none</span>
+            </div>
+            <div class="field">
+                <label for="opt-cp">Charm power</label>
+                <input type="number" id="opt-cp" min="1" max="15" step="1" placeholder="from config">
+                <span class="flag">--config-charm-power</span>
+            </div>
+            <div class="field">
+                <label for="opt-max-upgrades">Max upgrades</label>
+                <input type="number" id="opt-max-upgrades" min="0" max="7" step="1" placeholder="from config">
+                <span class="flag">--config-max-upgrades</span>
+            </div>
+            <div class="field">
+                <label for="opt-upgrade-penalty">Upgrade penalty</label>
+                <input type="number" id="opt-upgrade-penalty" min="0" max="1000000" step="1" placeholder="from config">
+                <span class="flag">--config-upgrade-penalty</span>
+            </div>
+            <div class="field">
+                <label for="opt-benchmark">Benchmark runs</label>
+                <input type="number" id="opt-benchmark" min="0" max="100" step="1" placeholder="off">
+                <span class="flag">--benchmark · times the search, no result</span>
+            </div>
+            <div class="field">
+                <span class="label">Search statistics</span>
+                <label class="toggle"><input type="checkbox" id="opt-trace"> Show</label>
+                <span class="flag" id="flag-trace">--bnb-trace</span>
+            </div>
+        </div>
+        <div class="command-row">Equivalent command<code class="command" id="command"></code></div>
+    </details>
+
     <div class="controls">
         <button class="primary" id="evaluate">Evaluate</button>
         <button id="cancel" disabled>Cancel</button>
-        <label class="limit">Time limit
-            <input type="number" id="time-limit" min="0" max="86400" step="1" value="300"> seconds (0 = none)
-        </label>
     </div>
 
     <div class="errors" id="errors" role="alert"></div>
@@ -194,8 +264,12 @@ rarity;name;charm power;effect:effect;value:value[;upgraded values]"></textarea>
         <div class="warning" id="incomplete" hidden></div>
         <div class="summary" id="summary"></div>
         <ul class="charms" id="chosen"></ul>
-        <h3>Set stats</h3>
+        <h3 id="stats-title">Set stats</h3>
         <pre class="term" id="stats"></pre>
+        <div id="trace-block" hidden>
+            <h3>Search statistics</h3>
+            <pre class="term" id="trace"></pre>
+        </div>
     </section>
 </main>
 
@@ -203,15 +277,19 @@ rarity;name;charm power;effect:effect;value:value[;upgraded values]"></textarea>
 "use strict";
 const $ = id => document.getElementById(id);
 const els = {
-    config: $("config"), charms: $("charms"), limit: $("time-limit"),
+    config: $("config"), charms: $("charms"),
     evaluate: $("evaluate"), cancel: $("cancel"),
     errors: $("errors"), status: $("status"), statusText: $("status-text"),
     result: $("result"), incomplete: $("incomplete"), summary: $("summary"), chosen: $("chosen"), stats: $("stats"),
-    charmCount: $("charm-count"),
+    charmCount: $("charm-count"), statsTitle: $("stats-title"), traceBlock: $("trace-block"), trace: $("trace"),
+    options: $("options"), command: $("command"),
+    algo: $("opt-algo"), threads: $("opt-threads"), timeLimit: $("opt-time-limit"), cp: $("opt-cp"),
+    maxUpgrades: $("opt-max-upgrades"), upgradePenalty: $("opt-upgrade-penalty"), benchmark: $("opt-benchmark"), traceOpt: $("opt-trace"),
+    flagThreads: $("flag-threads"), flagTimeLimit: $("flag-time-limit"), flagTrace: $("flag-trace"),
 };
 
 // ---- remember inputs in this browser (best effort: storage can be unavailable)
-const STORE = {config: "mtce.config", charms: "mtce.charms", limit: "mtce.timeLimit"};
+const STORE = {config: "mtce.config", charms: "mtce.charms"};
 function load(key) { try { return localStorage.getItem(key); } catch { return null; } }
 function save(key, value) { try { localStorage.setItem(key, value); } catch { /* ignore */ } }
 for (const [name, key] of Object.entries(STORE)) {
@@ -237,6 +315,82 @@ function wireFile(inputId, target) {
 }
 wireFile("config-file", els.config);
 wireFile("charms-file", els.charms);
+
+// ---- options: one control per mtce terminal flag
+const NUMBER_OPTIONS = ["threads", "timeLimit", "cp", "maxUpgrades", "upgradePenalty", "benchmark"];
+
+function numberValue(input) {
+    const v = input.value.trim();
+    if (v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : v; // the server reports anything that isn't a whole number in range
+}
+
+function readOptions() {
+    return {
+        algo: els.algo.value,
+        threads: numberValue(els.threads),
+        timeLimitSec: els.algo.value === "bnb" ? numberValue(els.timeLimit) : null,
+        cp: numberValue(els.cp),
+        maxUpgrades: numberValue(els.maxUpgrades),
+        upgradePenalty: numberValue(els.upgradePenalty),
+        trace: els.traceOpt.checked,
+        benchmarkRuns: numberValue(els.benchmark),
+    };
+}
+
+function updateOptionsUi() {
+    const algo = els.algo.value;
+    els.flagThreads.textContent = `--${algo}-threads`;
+    els.flagTrace.textContent = `--${algo}-trace`;
+    els.timeLimit.disabled = algo !== "bnb";
+    els.flagTimeLimit.textContent = algo === "bnb" ? "--bnb-time-limit · 0 = none" : "bnb only: naive always runs to the end";
+
+    const o = readOptions();
+    const parts = ["mtce", "--config your.conf", "--in charms.txt"];
+    if (o.algo !== "bnb") parts.push(`--algo ${o.algo}`);
+    if (o.threads !== null) parts.push(`--${o.algo}-threads ${o.threads}`);
+    if (o.timeLimitSec) parts.push(`--bnb-time-limit ${o.timeLimitSec}`);
+    if (o.cp !== null) parts.push(`--config-charm-power ${o.cp}`);
+    if (o.maxUpgrades !== null) parts.push(`--config-max-upgrades ${o.maxUpgrades}`);
+    if (o.upgradePenalty !== null) parts.push(`--config-upgrade-penalty ${o.upgradePenalty}`);
+    if (o.trace) parts.push(`--${o.algo}-trace`);
+    if (o.benchmarkRuns) parts.push(`--benchmark ${o.benchmarkRuns}`);
+    els.command.textContent = parts.join(" ");
+}
+
+function saveOptions() {
+    const saved = {algo: els.algo.value, trace: els.traceOpt.checked, open: els.options.open};
+    for (const name of NUMBER_OPTIONS) saved[name] = els[name].value;
+    save("mtce.options", JSON.stringify(saved));
+}
+
+function loadOptions() {
+    let saved = null;
+    try { saved = JSON.parse(load("mtce.options") ?? "null"); } catch { /* ignore */ }
+    if (saved && typeof saved === "object") {
+        if (saved.algo === "bnb" || saved.algo === "naive") els.algo.value = saved.algo;
+        els.traceOpt.checked = saved.trace === true;
+        if (typeof saved.open === "boolean") els.options.open = saved.open;
+        for (const name of NUMBER_OPTIONS) if (typeof saved[name] === "string") els[name].value = saved[name];
+    } else {
+        const oldLimit = load("mtce.timeLimit"); // from before the options panel
+        if (oldLimit !== null) els.timeLimit.value = oldLimit;
+    }
+    updateOptionsUi();
+}
+
+for (const name of ["algo", "traceOpt", ...NUMBER_OPTIONS]) {
+    els[name].addEventListener("input", () => { updateOptionsUi(); saveOptions(); });
+    els[name].addEventListener("change", () => { updateOptionsUi(); saveOptions(); });
+}
+els.options.addEventListener("toggle", saveOptions);
+loadOptions();
+
+fetch("/api/info").then(r => r.json()).then(info => {
+    els.threads.placeholder = `all cores (${info.defaultThreads})`;
+    if (info.version) document.querySelector("header p").textContent += ` mtce ${info.version}.`;
+}).catch(() => {});
 
 // ---- mtce's ANSI colors (24-bit) to HTML
 function escapeHtml(s) {
@@ -288,6 +442,20 @@ function showErrors(list) {
 
 function showResult(job) {
     const r = job.result;
+    if (r.kind === "benchmark") {
+        els.incomplete.hidden = true;
+        els.summary.innerHTML = `<span>Benchmark with <b>${escapeHtml(job.algo)}</b></span><span class="muted">${fmtElapsed(job.elapsedMs)} in total</span>`;
+        els.chosen.hidden = true;
+        els.statsTitle.textContent = "mtce benchmark output";
+        els.stats.innerHTML = ansiToHtml(r.outputAnsi.trim());
+        els.traceBlock.hidden = true;
+        els.result.classList.add("visible");
+        return;
+    }
+    els.chosen.hidden = false;
+    els.statsTitle.textContent = "Set stats";
+    els.traceBlock.hidden = !r.traceAnsi;
+    els.trace.innerHTML = r.traceAnsi ? ansiToHtml(r.traceAnsi.trim()) : "";
     els.incomplete.hidden = r.complete;
     if (!r.complete) {
         els.incomplete.textContent = `Timed out after ${fmtElapsed((job.timeLimitSec ?? 0) * 1000)}. This is the best build found so far and might not be optimal.`;
@@ -316,8 +484,9 @@ function render(status) {
     if (job.state === "running") {
         setRunning(true);
         els.status.classList.add("visible");
-        els.statusText.textContent = `Running for ${fmtElapsed(job.elapsedMs)}` +
-            (job.timeLimitSec ? ` · stops after ${fmtElapsed(job.timeLimitSec * 1000)} with the best set found so far` : "");
+        els.statusText.textContent = (job.benchmark ? "Benchmarking" : "Running") + ` for ${fmtElapsed(job.elapsedMs)}` +
+            (job.timeLimitSec ? ` · stops after ${fmtElapsed(job.timeLimitSec * 1000)} with the best set found so far` :
+                job.algo === "naive" ? " · naive has no time limit and can take very long on many charms (Cancel stops it)" : "");
         return;
     }
     setRunning(false);
@@ -348,9 +517,8 @@ async function post(path, body) {
 els.evaluate.addEventListener("click", async () => {
     showErrors([]);
     els.result.classList.remove("visible");
-    const limit = els.limit.value.trim() === "" ? 0 : Number(els.limit.value);
     try {
-        const {ok, data} = await post("/api/evaluate", {config: els.config.value, charms: els.charms.value, timeLimitSec: limit});
+        const {ok, data} = await post("/api/evaluate", {config: els.config.value, charms: els.charms.value, options: readOptions()});
         if (!ok) { showErrors(data.errors); return; }
         setRunning(true);
         await poll();

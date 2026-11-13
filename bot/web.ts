@@ -16,13 +16,14 @@ import {file as createTmpFile} from "tmp-promise";
 import {loadEffectNames} from "./effects";
 import {parseConfigText} from "./config_text";
 import {charmEntries, parseCharmText} from "./charm_data";
-import {buildMtceArgs} from "./eval_log";
+import {Algo, buildMtceArgs, mtceIdentity} from "./eval_log";
 import {MtceRun, parseBotOutput, runMtce} from "./mtce_process";
 import type {ChosenCharm} from "./format";
 
 const PAGE_PATH = join(dirname(fileURLToPath(import.meta.url)), "web", "index.html");
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 const MAX_TIME_LIMIT_SEC = 24 * 60 * 60;
+const MAX_BENCHMARK_RUNS = 100;
 
 function parseArgs(argv: string[]) {
     const opts = {port: 8080, threads: availableParallelism(), mtce: "./mtce", };
@@ -59,7 +60,55 @@ const opts = parseArgs(process.argv.slice(2));
 const knownEffects = new Set((await loadEffectNames()).map(name => name.toLowerCase().replace(/ /g, "_")));
 const isKnownEffect = (effect: string) => knownEffects.has(effect);
 
-interface JobResult {
+// The page's toggles and fields, one per mtce terminal flag (undefined = mtce's default / the config's value)
+interface RunOptions {
+    algo: Algo;                 // --algo
+    threads?: number;           // --bnb-threads / --naive-threads
+    timeLimitSec?: number;      // --bnb-time-limit (bnb only)
+    cp?: number;                // --config-charm-power
+    maxUpgrades?: number;       // --config-max-upgrades
+    upgradePenalty?: number;    // --config-upgrade-penalty
+    trace: boolean;             // --bnb-trace / --naive-trace
+    benchmarkRuns?: number;     // --benchmark
+}
+
+function parseRunOptions(raw: unknown): {options: RunOptions} | {errors: string[]} {
+    const o = (raw !== null && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const errors: string[] = [];
+    // blank fields arrive as null/undefined/""; anything else must be a whole number in range
+    const int = (key: string, label: string, min: number, max: number): number | undefined => {
+        const v = o[key];
+        if (v === undefined || v === null || v === "") {
+            return undefined;
+        }
+        if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max) {
+            errors.push(`${label} must be a whole number from ${min} to ${max}.`);
+            return undefined;
+        }
+        return v;
+    };
+
+    const algo = o.algo ?? "bnb";
+    if (algo !== "bnb" && algo !== "naive") {
+        errors.push("Algorithm must be bnb or naive.");
+    }
+    const timeLimit = int("timeLimitSec", "Time limit", 0, MAX_TIME_LIMIT_SEC);
+    const benchmark = int("benchmarkRuns", "Benchmark runs", 0, MAX_BENCHMARK_RUNS);
+    const options: RunOptions = {
+        algo: algo === "naive" ? "naive" : "bnb",
+        threads: int("threads", "Threads", 1, 1024),
+        timeLimitSec: timeLimit !== undefined && timeLimit > 0 ? timeLimit : undefined,
+        cp: int("cp", "Charm power", 1, 15),
+        maxUpgrades: int("maxUpgrades", "Max upgrades", 0, 7),
+        upgradePenalty: int("upgradePenalty", "Upgrade penalty", 0, 1000000),
+        trace: o.trace === true,
+        benchmarkRuns: benchmark !== undefined && benchmark > 0 ? benchmark : undefined,
+    };
+    return errors.length > 0 ? {errors, } : {options, };
+}
+
+interface EvalResult {
+    kind: "eval";
     weight: string;
     complete: boolean;
     charms: ChosenCharm[];
@@ -68,6 +117,12 @@ interface JobResult {
     upgradesUsed: number;
     maxUpgrades?: number;
     statsAnsi: string;
+    traceAnsi?: string;  // search statistics, when the trace toggle is on
+}
+
+interface BenchmarkResult {
+    kind: "benchmark";
+    outputAnsi: string;  // mtce's own --benchmark output
 }
 
 interface Job {
@@ -75,8 +130,10 @@ interface Job {
     startTime: number;
     endTime?: number;
     state: "running" | "done" | "error" | "cancelled";
+    algo: Algo;
+    benchmark: boolean;
     timeLimitSec?: number;
-    result?: JobResult;
+    result?: EvalResult | BenchmarkResult;
     error?: string;
     run?: MtceRun;
 }
@@ -85,7 +142,7 @@ let job: Job | undefined;
 let nextJobId = 1;
 
 // one evaluation at a time: mtce already uses every core
-async function startJob(configText: string, charmText: string, timeLimitSec: number | undefined): Promise<{errors: string[]} | {id: number}> {
+async function startJob(configText: string, charmText: string, options: RunOptions): Promise<{errors: string[]} | {id: number}> {
     const config = parseConfigText(configText, isKnownEffect, "(check the spelling; names are as in the charm file)");
     const charms = parseCharmText(charmText, isKnownEffect);
     const errors = [
@@ -101,20 +158,27 @@ async function startJob(configText: string, charmText: string, timeLimitSec: num
         return {errors: ["An evaluation is already running: wait for it or cancel it."], };
     }
 
-    const cp = config.config.settings?.cp ?? 15;
-    const maxUpgrades = config.config.settings?.maxUpgrades;
-    const upgradePenalty = config.config.settings?.upgradePenalty;
+    // a field on the page overrides the config, like the --config-* flags do
+    const cp = options.cp ?? config.config.settings?.cp ?? 15;
+    const maxUpgrades = options.maxUpgrades ?? config.config.settings?.maxUpgrades;
+    const upgradePenalty = options.upgradePenalty ?? config.config.settings?.upgradePenalty;
+    const timeLimitSec = options.algo === "bnb" ? options.timeLimitSec : undefined; // naive has no time limit
+    const benchmark = options.benchmarkRuns !== undefined;
 
-    const current: Job = {id: nextJobId++, startTime: Date.now(), state: "running", timeLimitSec, };
+    const current: Job = {id: nextJobId++, startTime: Date.now(), state: "running", algo: options.algo, benchmark, timeLimitSec, };
     job = current;
 
     const charmsFile = await createTmpFile();
     await writeFile(charmsFile.path, charms.charms.join("\n"));
     const runOptions = {weights: config.config.weights, cp, maxUpgrades, upgradePenalty, };
-    const args = buildMtceArgs(runOptions, charmsFile.path, "bnb", opts.threads, {timeLimitSec, });
+    const args = buildMtceArgs(runOptions, charmsFile.path, options.algo, options.threads ?? opts.threads, {
+        timeLimitSec,
+        trace: options.trace,
+        benchmarkRuns: options.benchmarkRuns,
+    });
     current.run = runMtce(opts.mtce, args, undefined);
-    console.log(`[web] evaluating ${charms.charms.length} charms, ${Object.keys(config.config.weights).length} weights, cp ${cp}` +
-        (timeLimitSec !== undefined ? `, time limit ${timeLimitSec}s` : ""));
+    console.log(`[web] ${benchmark ? `benchmarking (${options.benchmarkRuns} runs)` : "evaluating"} ${charms.charms.length} charms, ` +
+        `${Object.keys(config.config.weights).length} weights, ${options.algo}, cp ${cp}` + (timeLimitSec !== undefined ? `, time limit ${timeLimitSec}s` : ""));
 
     current.run.done.then(spawn => {
         current.endTime = Date.now();
@@ -124,7 +188,14 @@ async function startJob(configText: string, charmText: string, timeLimitSec: num
             return;
         }
 
-        const output = spawn.success ? parseBotOutput(spawn.stdout.toString("utf8")) : undefined;
+        if (benchmark && spawn.success) {
+            current.state = "done";
+            current.result = {kind: "benchmark", outputAnsi: spawn.stdout.toString("utf8"), };
+            console.log(`[web] benchmark done after ${((current.endTime - current.startTime) / 1000).toFixed(1)}s`);
+            return;
+        }
+
+        const output = spawn.success && !benchmark ? parseBotOutput(spawn.stdout.toString("utf8")) : undefined;
         if (output === undefined) {
             current.state = "error";
             const detail = spawn.stderr.toString("utf8").trim() || spawn.stdout.toString("utf8").trim();
@@ -138,6 +209,7 @@ async function startJob(configText: string, charmText: string, timeLimitSec: num
         const chosen = output.charms.map(i => entries[i]);
         current.state = "done";
         current.result = {
+            kind: "eval",
             weight: output.weight.toString(),
             complete: spawn.complete,
             charms: chosen,
@@ -146,6 +218,7 @@ async function startJob(configText: string, charmText: string, timeLimitSec: num
             upgradesUsed: chosen.filter(c => c.upgraded).length,
             maxUpgrades,
             statsAnsi: output.statsAnsi,
+            traceAnsi: options.trace ? spawn.stderr.toString("utf8") : undefined,
         };
         console.log(`[web] ${spawn.complete ? "done" : "stopped at the time limit"} after ${((current.endTime - current.startTime) / 1000).toFixed(1)}s`);
     });
@@ -157,10 +230,10 @@ function jobStatus() {
     if (job === undefined) {
         return {job: null, };
     }
-    const {id, startTime, endTime, state, timeLimitSec, result, error, } = job;
+    const {id, startTime, endTime, state, algo, benchmark, timeLimitSec, result, error, } = job;
     return {
         job: {
-            id, startTime, endTime, state, timeLimitSec, result, error,
+            id, startTime, endTime, state, algo, benchmark, timeLimitSec, result, error,
             elapsedMs: (job.endTime ?? Date.now()) - job.startTime,
         },
     };
@@ -226,18 +299,20 @@ const server = createServer(async (req, res) => {
             res.end(readFileSync(PAGE_PATH)); // read each time, so page edits show on reload
         } else if (req.method === "GET" && path === "/api/status") {
             send(res, 200, jobStatus());
+        } else if (req.method === "GET" && path === "/api/info") {
+            send(res, 200, {defaultThreads: opts.threads, version: mtceIdentity(opts.mtce).version, });
         } else if (req.method === "POST" && path === "/api/evaluate") {
-            const body = JSON.parse(await readBody(req)) as {config?: unknown; charms?: unknown; timeLimitSec?: unknown};
+            const body = JSON.parse(await readBody(req)) as {config?: unknown; charms?: unknown; options?: unknown};
             if (typeof body.config !== "string" || typeof body.charms !== "string") {
                 send(res, 400, {errors: ["config and charms must be text"], });
                 return;
             }
-            const limit = body.timeLimitSec;
-            if (limit !== undefined && limit !== null && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 0 || limit > MAX_TIME_LIMIT_SEC)) {
-                send(res, 400, {errors: [`Time limit must be a whole number of seconds from 0 to ${MAX_TIME_LIMIT_SEC}.`], });
+            const parsed = parseRunOptions(body.options);
+            if ("errors" in parsed) {
+                send(res, 400, parsed);
                 return;
             }
-            const started = await startJob(body.config, body.charms, typeof limit === "number" && limit > 0 ? limit : undefined);
+            const started = await startJob(body.config, body.charms, parsed.options);
             send(res, "errors" in started ? 400 : 200, started);
         } else if (req.method === "POST" && path === "/api/cancel") {
             if (job?.state === "running") {
