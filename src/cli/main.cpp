@@ -169,23 +169,8 @@ namespace
     {
         const std::vector<charm>& charms;
         const config& config;
-        bool print_algo;
-
-        // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-        static void naive_trace_prune(std::vector<std::string_view>& abilities, std::vector<std::string_view>& charms)
-        {
-            std::println(std::cout, gray("prune - only considering abilities:"));
-            for (const auto ability : abilities)
-            {
-                std::println(std::cout, gray("  - {}"), ability);
-            }
-
-            std::println(std::cout, gray("prune - only considering charms:"));
-            for (const auto charm : charms)
-            {
-                std::println(std::cout, gray("  - {}"), charm);
-            }
-        }
+        // where --naive-trace / --bnb-trace output goes: stderr in bot mode, whose stdout carries only the result
+        std::ostream* trace_out = &std::cout;
 
         auto operator()(naive_algo_flags flags) -> eval_result
         {
@@ -193,7 +178,20 @@ namespace
 
             if (flags.enable_trace)
             {
-                trace.trace_prune = algo_invoker::naive_trace_prune;
+                // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+                trace.trace_prune = [out = trace_out](std::vector<std::string_view>& abilities, std::vector<std::string_view>& charms) {
+                    std::println(*out, gray("prune - only considering abilities:"));
+                    for (const auto ability : abilities)
+                    {
+                        std::println(*out, gray("  - {}"), ability);
+                    }
+
+                    std::println(*out, gray("prune - only considering charms:"));
+                    for (const auto charm : charms)
+                    {
+                        std::println(*out, gray("  - {}"), charm);
+                    }
+                };
             }
 
             return evaluate_naive(
@@ -209,22 +207,19 @@ namespace
             );
         }
 
-        static void bnb_trace_stats(const bnb_stats& stats)
-        {
-            std::println(std::cout, gray("bnb - considered {} charm(s) over {} weighted effect(s)"), stats.charms, stats.effects);
-            std::println(
-                std::cout, gray("bnb - scored {} set(s), pruned {} subtree(s) ({} needed the charm-power bound)"), stats.visited, stats.pruned,
-                stats.pruned_knapsack
-            );
-        }
-
         auto operator()(bnb_algo_flags flags) -> eval_result
         {
             bnb_tracing_config trace;
 
             if (flags.enable_trace)
             {
-                trace.trace_stats = algo_invoker::bnb_trace_stats;
+                trace.trace_stats = [out = trace_out](const bnb_stats& stats) {
+                    std::println(*out, gray("bnb - considered {} charm(s) over {} weighted effect(s)"), stats.charms, stats.effects);
+                    std::println(
+                        *out, gray("bnb - scored {} set(s), pruned {} subtree(s) ({} needed the charm-power bound)"), stats.visited,
+                        stats.pruned, stats.pruned_knapsack
+                    );
+                };
             }
 
             return evaluate_bnb(
@@ -257,6 +252,7 @@ auto main(int argc, const char* const* argv) -> int
             algo_invoker{
                 .charms = charms,
                 .config = config,
+                .trace_out = bot_mode ? &std::cerr : &std::cout,
             },
             algo
         );
