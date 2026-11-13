@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Charm Set Evaluator</title>
+<style>
+:root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --border: #d9dde3;
+    --text: #1d232b;
+    --muted: #5d6673;
+    --accent: #3d6fd8;
+    --accent-text: #ffffff;
+    --danger: #c0392b;
+    --danger-bg: #fdecea;
+    --warn-bg: #fff4dc;
+    --warn-border: #e5b549;
+    --input-bg: #fbfcfd;
+    --term-bg: #16191e;
+    --term-text: #d5d9df;
+    color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --bg: #111418;
+        --card: #191d23;
+        --border: #2c333c;
+        --text: #e3e7ec;
+        --muted: #949eab;
+        --accent: #6b95f0;
+        --accent-text: #0d1117;
+        --danger: #f07167;
+        --danger-bg: #3a1d1b;
+        --warn-bg: #3a2f14;
+        --warn-border: #a8842d;
+        --input-bg: #14181d;
+        --term-bg: #0d0f12;
+        --term-text: #d5d9df;
+        color-scheme: dark;
+    }
+}
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+header h1 { font-size: 22px; margin: 0 0 4px; }
+header p { margin: 0 0 20px; color: var(--muted); }
+.inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .inputs { grid-template-columns: 1fr; } }
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    min-width: 0;
+}
+.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.card-head h2 { font-size: 15px; margin: 0; }
+.hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+textarea {
+    width: 100%;
+    height: 280px;
+    resize: vertical;
+    background: var(--input-bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre;
+    overflow-wrap: normal;
+}
+textarea:focus, input:focus, button:focus-visible, label.button:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+button, label.button {
+    font: inherit;
+    font-size: 14px;
+    border-radius: 6px;
+    padding: 6px 14px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    cursor: pointer;
+}
+label.button { font-size: 13px; padding: 3px 10px; }
+label.button input { position: absolute; opacity: 0; width: 0; height: 0; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+button:disabled { opacity: 0.5; cursor: default; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 16px 0; }
+.controls label.limit { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+.controls input[type="number"] {
+    width: 90px;
+    font: inherit;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--input-bg);
+    color: var(--text);
+}
+.status { display: none; margin-bottom: 16px; }
+.status.visible { display: block; }
+.errors {
+    display: none;
+    background: var(--danger-bg);
+    border: 1px solid var(--danger);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+}
+.errors.visible { display: block; }
+.errors ul { margin: 0; padding-left: 18px; }
+.result { display: none; }
+.result.visible { display: block; }
+.warning {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+}
+.summary { display: flex; flex-wrap: wrap; gap: 6px 24px; margin-bottom: 10px; }
+.summary b { font-variant-numeric: tabular-nums; }
+.charms { list-style: none; margin: 0 0 12px; padding: 0; }
+.charms li { padding: 3px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: 12px; }
+.charms li:last-child { border-bottom: 0; }
+.charms .cp { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.term {
+    background: var(--term-bg);
+    color: var(--term-text);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    margin: 0;
+}
+h3 { font-size: 14px; margin: 14px 0 6px; }
+.muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+    <header>
+        <h1>Charm Set Evaluator</h1>
+        <p>Finds the best set of charms for your weights. Runs mtce on this computer.</p>
+    </header>
+
+    <div class="inputs">
+        <section class="card">
+            <div class="card-head">
+                <h2>Config</h2>
+                <label class="button">Load file<input type="file" id="config-file" accept=".conf,.txt,text/plain"></label>
+            </div>
+            <textarea id="config" spellcheck="false" placeholder="charm_power = 15
+max_upgrades = 2        # optional
+upgrade_penalty = 1     # optional
+[weights]
+firework_blast_cooldown = 10
+firework_blast_damage = 10"></textarea>
+            <p class="hint">Same format as an mtce .conf file or the bot's <code>/config import</code>.</p>
+        </section>
+        <section class="card">
+            <div class="card-head">
+                <h2>Charms</h2>
+                <label class="button">Load file<input type="file" id="charms-file" accept=".txt,text/plain"></label>
+            </div>
+            <textarea id="charms" spellcheck="false" placeholder="One charm per line, as exported from the game:
+rarity;name;charm power;effect:effect;value:value[;upgraded values]"></textarea>
+            <p class="hint" id="charm-count">&nbsp;</p>
+        </section>
+    </div>
+
+    <div class="controls">
+        <button class="primary" id="evaluate">Evaluate</button>
+        <button id="cancel" disabled>Cancel</button>
+        <label class="limit">Time limit
+            <input type="number" id="time-limit" min="0" max="86400" step="1" value="300"> seconds (0 = none)
+        </label>
+    </div>
+
+    <div class="errors" id="errors" role="alert"></div>
+
+    <div class="status" id="status" aria-live="polite">
+        <div id="status-text"></div>
+    </div>
+
+    <section class="card result" id="result">
+        <div class="warning" id="incomplete" hidden></div>
+        <div class="summary" id="summary"></div>
+        <ul class="charms" id="chosen"></ul>
+        <h3>Set stats</h3>
+        <pre class="term" id="stats"></pre>
+    </section>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const els = {
+    config: $("config"), charms: $("charms"), limit: $("time-limit"),
+    evaluate: $("evaluate"), cancel: $("cancel"),
+    errors: $("errors"), status: $("status"), statusText: $("status-text"),
+    result: $("result"), incomplete: $("incomplete"), summary: $("summary"), chosen: $("chosen"), stats: $("stats"),
+    charmCount: $("charm-count"),
+};
+
+// ---- remember inputs in this browser (best effort: storage can be unavailable)
+const STORE = {config: "mtce.config", charms: "mtce.charms", limit: "mtce.timeLimit"};
+function load(key) { try { return localStorage.getItem(key); } catch { return null; } }
+function save(key, value) { try { localStorage.setItem(key, value); } catch { /* ignore */ } }
+for (const [name, key] of Object.entries(STORE)) {
+    const value = load(key);
+    if (value !== null) els[name].value = value;
+    els[name].addEventListener("input", () => { save(key, els[name].value); if (name === "charms") countCharms(); });
+}
+
+function countCharms() {
+    const n = els.charms.value.split(/\r\n|\r|\n/).filter(l => l.trim()).length;
+    els.charmCount.textContent = n > 0 ? `${n} charm${n === 1 ? "" : "s"}` : " ";
+}
+countCharms();
+
+function wireFile(inputId, target) {
+    $(inputId).addEventListener("change", async e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        target.value = await file.text();
+        target.dispatchEvent(new Event("input"));
+        e.target.value = "";
+    });
+}
+wireFile("config-file", els.config);
+wireFile("charms-file", els.charms);
+
+// ---- mtce's ANSI colors (24-bit) to HTML
+function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"})[c]);
+}
+function ansiToHtml(text) {
+    let fg = null, bold = false, out = "", last = 0;
+    const emit = chunk => {
+        if (!chunk) return;
+        const style = [fg ? `color:${fg}` : "", bold ? "font-weight:700" : ""].filter(Boolean).join(";");
+        out += style ? `<span style="${style}">${escapeHtml(chunk)}</span>` : escapeHtml(chunk);
+    };
+    const re = /\u001b\[([0-9;]*)m/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+        emit(text.slice(last, m.index));
+        last = re.lastIndex;
+        const codes = m[1] === "" ? [0] : m[1].split(";").map(Number);
+        for (let i = 0; i < codes.length; i++) {
+            const c = codes[i];
+            if (c === 0) { fg = null; bold = false; }
+            else if (c === 1) bold = true;
+            else if (c === 22) bold = false;
+            else if (c === 39) fg = null;
+            else if (c === 38 && codes[i + 1] === 2) { fg = `rgb(${codes[i + 2]},${codes[i + 3]},${codes[i + 4]})`; i += 4; }
+        }
+    }
+    emit(text.slice(last));
+    return out;
+}
+
+// charm name colors by rarity, as mtce uses in the terminal (an upgraded "(u)" copy is one rarity higher)
+const RARITY_COLORS = ["#9f929c", "#70bc6d", "#705eca", "#cd5eca", "#e49b20"];
+
+function fmtElapsed(ms) {
+    const s = Math.floor(ms / 1000);
+    return s < 60 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+function showErrors(list) {
+    if (!list || list.length === 0) {
+        els.errors.classList.remove("visible");
+        els.errors.innerHTML = "";
+        return;
+    }
+    els.errors.innerHTML = `<ul>${list.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ul>`;
+    els.errors.classList.add("visible");
+}
+
+function showResult(job) {
+    const r = job.result;
+    els.incomplete.hidden = r.complete;
+    if (!r.complete) {
+        els.incomplete.textContent = `Timed out after ${fmtElapsed((job.timeLimitSec ?? 0) * 1000)}. This is the best build found so far and might not be optimal.`;
+    }
+    els.summary.innerHTML =
+        `<span>Weight <b>${escapeHtml(r.weight)}</b></span>` +
+        `<span>Charm power <b>${r.cpUsed}/${r.maxCp}</b></span>` +
+        `<span>Upgrades <b>${r.upgradesUsed}${r.maxUpgrades !== undefined ? `/${r.maxUpgrades}` : ""}</b></span>` +
+        `<span class="muted">${fmtElapsed(job.elapsedMs)}</span>`;
+    els.chosen.innerHTML = r.charms.length === 0 ? `<li class="muted">No charm improves the score.</li>` : r.charms.map(c =>
+        `<li><span style="color:${RARITY_COLORS[Math.max(0, Math.min(4, c.rarity))]}">${escapeHtml(c.name)}</span><span class="cp">${c.charmPower} CP</span></li>`
+    ).join("");
+    els.stats.innerHTML = ansiToHtml(r.statsAnsi.trim());
+    els.result.classList.add("visible");
+}
+
+let polling = null;
+function setRunning(running) {
+    els.evaluate.disabled = running;
+    els.cancel.disabled = !running;
+}
+
+function render(status) {
+    const job = status.job;
+    if (!job) return;
+    if (job.state === "running") {
+        setRunning(true);
+        els.status.classList.add("visible");
+        els.statusText.textContent = `Running for ${fmtElapsed(job.elapsedMs)}` +
+            (job.timeLimitSec ? ` · stops after ${fmtElapsed(job.timeLimitSec * 1000)} with the best set found so far` : "");
+        return;
+    }
+    setRunning(false);
+    els.status.classList.remove("visible");
+    stopPolling();
+    if (job.state === "done") showResult(job);
+    else if (job.state === "error") showErrors([job.error]);
+    else if (job.state === "cancelled") showErrors(["Evaluation cancelled."]);
+}
+
+async function poll() {
+    try {
+        render(await (await fetch("/api/status")).json());
+    } catch {
+        stopPolling();
+        setRunning(false);
+        showErrors(["Lost contact with the web server. Is `npx tsx web.ts` still running?"]);
+    }
+}
+function startPolling() { if (!polling) polling = setInterval(poll, 500); }
+function stopPolling() { clearInterval(polling); polling = null; }
+
+async function post(path, body) {
+    const res = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body ?? {})});
+    return {ok: res.ok, data: await res.json()};
+}
+
+els.evaluate.addEventListener("click", async () => {
+    showErrors([]);
+    els.result.classList.remove("visible");
+    const limit = els.limit.value.trim() === "" ? 0 : Number(els.limit.value);
+    try {
+        const {ok, data} = await post("/api/evaluate", {config: els.config.value, charms: els.charms.value, timeLimitSec: limit});
+        if (!ok) { showErrors(data.errors); return; }
+        setRunning(true);
+        await poll();
+        startPolling();
+    } catch {
+        showErrors(["Could not reach the web server. Is `npx tsx web.ts` running?"]);
+    }
+});
+
+els.cancel.addEventListener("click", async () => {
+    try { render(await (await post("/api/cancel")).data); } catch { /* the next poll reports it */ }
+});
+
+document.addEventListener("keydown", e => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !els.evaluate.disabled) els.evaluate.click();
+});
+
+// pick up an evaluation that is still running (e.g. after a reload)
+fetch("/api/status").then(r => r.json()).then(status => {
+    if (status.job?.state === "running") { render(status); startPolling(); }
+}).catch(() => {});
+</script>
+</body>
+</html>

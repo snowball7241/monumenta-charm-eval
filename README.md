@@ -125,6 +125,22 @@ Advanced options (specifying different algorithms, etc) can be done with additio
 $ ./mtce --help
 ```
 
+### Web front end
+
+A small page to evaluate in your browser instead of the terminal or the Discord bot. It runs on your own computer and needs
+Node.js 20+ and a built (or prebuilt) `mtce`:
+
+```sh
+$ cd bot
+$ npm install
+$ ln -s ../build/mtce mtce     # or pass --mtce path/to/mtce
+$ npm run web                  # same as: npx tsx web.ts
+```
+
+Then open http://localhost:8080. Paste or load your config and charm file; the page remembers them, and stops at the time
+limit (default 300 seconds) with the best set found so far. Options: `--port`, `--threads`, `--mtce` (see
+`npx tsx web.ts --help`). It only accepts connections from this computer.
+
 ## Future Work
 
 - [ ] Tree pruning  
