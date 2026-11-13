@@ -9,7 +9,8 @@ import {
 } from "discord.js";
 import {UserData, UserEvalJob, UserWeightConfig} from "./data";
 import {describeTask, EvalJobRunner, fmtElapsed, runningStatus} from "./eval_queue";
-import {ChosenCharm, formatEvalMessage} from "./format";
+import {formatEvalMessage} from "./format";
+import {charmEntries, parseCharmText} from "./charm_data";
 import {formatConfigText, parseConfigText} from "./config_text";
 import {getConfig} from "./config";
 
@@ -173,10 +174,6 @@ async function tryFetchConfig(interaction: ChatInputCommandInteraction, userData
     return config;
 }
 
-function splitByNewline(value: string): string[] {
-    return value.split(/\r\n|\r|\n/);
-}
-
 async function doEvaluateCharms(interaction: ChatInputCommandInteraction, userData: UserData, queue: EvalJobRunner, task: UserEvalJob) {
     const {owner, name, charmDataUrl: url, } = task;
 
@@ -216,60 +213,12 @@ async function doEvaluateCharms(interaction: ChatInputCommandInteraction, userDa
         return;
     }
 
-    const charmText = await fetchResult.text();
-
-    const charmLines = splitByNewline(charmText)
-        .map((str, idx) => [str.trim(), idx + 1] as [string, number])
-        .filter(([str]) => str.length !== 0);
-
-    const badLines = charmLines.filter(([str]) => {
-        const parts = str.split(";");
-        if (parts.length !== 5 && parts.length !== 6) {
-            return true;
-        }
-
-        const [rarity, , cp, effectNames, effectValues] = parts;
-
-        const effectNameSplit = effectNames.split(":");
-
-        if (effectNameSplit.filter(x => !NAME_TO_ID.has(x)).length > 0) {
-            return true;
-        }
-
-        const findEffectValueErrors = (content: string): boolean => {
-            const data = content.split(":");
-            if (data.length !== effectNameSplit.length) {
-                return true;
-            }
-
-            return data.filter(x => Number.isNaN(parseFloat(x))).length > 0;
-        };
-
-        if (!(parseInt(rarity) >= 0 && parseInt(rarity) < 5)) {
-            return true;
-        }
-
-        if (!(parseInt(cp) > 0)) {
-            return true;
-        }
-
-        if (findEffectValueErrors(effectValues)) {
-            return true;
-        }
-
-        if (parts.length === 6) {
-            if (findEffectValueErrors(parts[5])) {
-                return true;
-            }
-        }
-    });
-
-    const charms = charmLines.map(([a]) => a);
-
-    if (badLines.length > 0) {
-        await sendReply(interaction, `Bad charm data on lines: ${badLines.map(([, v]) => v).join(", ")}!`);
+    const parsedCharms = parseCharmText(await fetchResult.text(), x => NAME_TO_ID.has(x));
+    if (!parsedCharms.ok) {
+        await sendReply(interaction, `Bad charm data on lines: ${parsedCharms.badLines.join(", ")}!`);
         return;
     }
+    const charms = parsedCharms.charms;
 
     const result = await queue.evaluate(interaction.user.id, task.owner, task.name, config.weights, charms, cp, {maxUpgrades, upgradePenalty, });
 
@@ -278,15 +227,7 @@ async function doEvaluateCharms(interaction: ChatInputCommandInteraction, userDa
         return;
     }
 
-    // mtce numbers charms in file order, with an upgradable charm followed by its "(u)" copy (one rarity higher)
-    const entries: ChosenCharm[] = charms.flatMap(x => {
-        const parts = x.split(";");
-        const name = parts[1];
-        const rarity = parseInt(parts[0]);
-        const charmPower = parseInt(parts[2]);
-        const base = {name, charmPower, rarity, upgraded: false, };
-        return parts.length === 6 ? [base, {name: `${name} (u)`, charmPower, rarity: rarity + 1, upgraded: true, }] : [base];
-    });
+    const entries = charmEntries(charms);
 
     await sendReply(interaction, formatEvalMessage({
         note: result.complete ? undefined :

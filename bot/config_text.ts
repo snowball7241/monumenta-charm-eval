@@ -20,7 +20,8 @@ const SETTINGS: Record<string, {key: keyof ConfigSettings; min: number; max: num
 
 export type ParseResult = {ok: true; config: UserWeightConfig} | {ok: false; errors: string[]};
 
-export function parseConfigText(text: string, isKnownEffect: (effect: string) => boolean): ParseResult {
+// `unknownEffectHint` follows the "unknown effect" error (the bot points at its /findeffect command)
+export function parseConfigText(text: string, isKnownEffect: (effect: string) => boolean, unknownEffectHint = "(try `/findeffect`)"): ParseResult {
     const errors: string[] = [];
     const weights: Record<string, string> = {};
     const settings: ConfigSettings = {};
@@ -77,7 +78,7 @@ export function parseConfigText(text: string, isKnownEffect: (effect: string) =>
         }
 
         if (!isKnownEffect(key)) {
-            errors.push(`line ${lineNo}: unknown effect \`${key}\` (try \`/findeffect\`)`);
+            errors.push(`line ${lineNo}: unknown effect \`${key}\` ${unknownEffectHint}`);
             return;
         }
 
