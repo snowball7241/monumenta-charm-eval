@@ -31,3 +31,4 @@ bot/data.json
 bot/audit/
 bot/effects_cache.json
 bot/mtce
+bot/dist-web/

@@ -13,6 +13,8 @@ on:
       - "meson.build"
       - "meson_options.txt"
       - "samples/**"
+      - "bot/**"
+      - "install/**"
       - ".github/**"
   workflow_dispatch:
 
@@ -79,18 +81,58 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
+  # the web front end as one file (bot/web.ts bundled with its dependencies) plus its page; it needs only Node.js to run, which
+  # the installers download
+  web:
+    name: build (web front end)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Bundle and package
+        working-directory: bot
+        run: |
+          version="${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}"
+          npm ci
+          npm run build:web
+          stage="../dist/mtce-web-$version"
+          mkdir -p "$stage"
+          cp -R dist-web/. "$stage/"
+          cp ../LICENSE "$stage/"
+          # smoke test: the bundle must start without node_modules
+          (cd "$stage" && node web.mjs --help)
+          cd ../dist && zip -qr "mtce-web-$version.zip" "mtce-web-$version"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mtce-web
+          path: dist/*.zip
+          if-no-files-found: error
+
   release:
     name: publish release
     if: github.ref_type == 'tag'
-    needs: build
+    needs: [build, web]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      - name: Add installers and checksums
+        # the installers download from releases/latest and verify every file against SHA256SUMS.txt
+        run: |
+          cp install/install-mac.sh install/install-mac.command install/install-windows.ps1 install/install-windows.bat dist/
+          cd dist && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Create release
         env:

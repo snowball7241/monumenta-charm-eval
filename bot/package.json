@@ -4,7 +4,8 @@
     "main": "index.js",
     "scripts": {
         "test": "echo \"Error: no test specified\" && exit 1",
-        "web": "tsx web.ts"
+        "web": "tsx web.ts",
+        "build:web": "esbuild web.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist-web/web.mjs \"--banner:js=import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" && node -e \"require('fs').cpSync('web', 'dist-web/web', {recursive: true})\""
     },
     "author": "",
     "license": "GPL-3.0-only",
@@ -13,6 +14,7 @@
         "@eslint/js": "^9.26.0",
         "@stylistic/eslint-plugin-ts": "^4.2.0",
         "@types/node": "^22.15.15",
+        "esbuild": "0.25.4",
         "eslint": "^9.26.0",
         "tsx": "^4.19.4",
         "typescript": "^5.8.3",

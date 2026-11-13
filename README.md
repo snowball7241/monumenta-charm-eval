@@ -4,6 +4,28 @@ A fast Zenith Charm evaluation tool written in C++, optimized for multithreaded 
 
 ## Usage
 
+### One-click install (web app)
+
+The easiest way: installs the latest release with its web front end (see [Web front end](#web-front-end)) and puts a
+"Charm Evaluator" launcher on your Desktop that opens it in your browser. Nothing else is needed: the installer brings its own
+copy of Node.js, needs no admin rights, and checks every download against the release's checksums. Run it again to update.
+
+**macOS** (13.3+): paste into Terminal:
+
+```sh
+curl -fsSL https://github.com/snowball7241/monumenta-charm-eval/releases/latest/download/install-mac.sh | bash
+```
+
+or download `install-mac.command` from the [Releases](../../releases) page and double-click it. Because it is not signed,
+macOS blocks it the first time: open System Settings → Privacy & Security and click "Open Anyway" (older macOS: right-click →
+Open). The Terminal command above avoids this. Installs to `~/Applications/Charm Evaluator`.
+
+**Windows** (10/11, 64-bit): download `install-windows.bat` from the [Releases](../../releases) page and double-click it. If
+SmartScreen says "Windows protected your PC", choose "More info → Run anyway". Installs to `%LOCALAPPDATA%\Charm Evaluator`
+and adds Desktop and Start menu shortcuts.
+
+To uninstall, delete the install folder and the "Charm Evaluator" shortcuts.
+
 ### Prebuilt binaries
 
 Download the archive for your platform from the [Releases](../../releases) page, extract it, and run `mtce` (`mtce.exe` on Windows)

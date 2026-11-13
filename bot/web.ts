@@ -1,12 +1,13 @@
 // Local web front end for mtce, an alternative to hosting the Discord bot: paste or load a config and a charm file, evaluate,
 // and see the result with mtce's colors.
 //
-//   npx tsx web.ts [--port 8080] [--threads n] [--mtce ./mtce]
+//   npx tsx web.ts [--port 8080] [--threads n] [--mtce ./mtce] [--open]
 //
-// then open http://localhost:8080. It listens on this computer only (127.0.0.1) and needs no Discord token or bot config.
+// then open http://localhost:8080 (--open does that for you). If the default port is taken, the next free one is used. It listens on this computer only (127.0.0.1) and needs no Discord token or bot config.
 // Config and charm text use the same formats as the bot (see config_text.ts and charm_data.ts).
 
 import {createServer, IncomingMessage, ServerResponse} from "node:http";
+import {spawn} from "node:child_process";
 import {readFileSync} from "node:fs";
 import {writeFile} from "node:fs/promises";
 import {availableParallelism} from "node:os";
@@ -26,7 +27,13 @@ const MAX_TIME_LIMIT_SEC = 24 * 60 * 60;
 const MAX_BENCHMARK_RUNS = 100;
 
 function parseArgs(argv: string[]) {
-    const opts = {port: 8080, threads: availableParallelism(), mtce: "./mtce", };
+    const opts = {
+        port: 8080,
+        portGiven: false, // an explicit --port is used as is; the default moves on to the next free port
+        threads: availableParallelism(),
+        mtce: process.platform === "win32" ? "mtce.exe" : "./mtce",
+        open: false,
+    };
     for (let i = 0; i < argv.length; i++) {
         const value = () => {
             const v = argv[++i];
@@ -36,11 +43,12 @@ function parseArgs(argv: string[]) {
             return v;
         };
         switch (argv[i]) {
-        case "--port": opts.port = Number(value()); break;
+        case "--port": opts.port = Number(value()); opts.portGiven = true; break;
         case "--threads": opts.threads = Number(value()); break;
         case "--mtce": opts.mtce = value(); break;
+        case "--open": opts.open = true; break;
         case "--help": case "-h":
-            console.log("usage: npx tsx web.ts [--port 8080] [--threads n] [--mtce ./mtce]");
+            console.log("usage: npx tsx web.ts [--port 8080] [--threads n] [--mtce ./mtce] [--open]");
             process.exit(0);
             break;
         default:
@@ -328,11 +336,33 @@ const server = createServer(async (req, res) => {
     }
 });
 
-server.on("error", e => {
+function openBrowser(url: string) {
+    const [command, args] = process.platform === "darwin" ? ["open", [url]] :
+        process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
+    spawn(command, args, {detached: true, stdio: "ignore", }).on("error", () => {
+        console.log(`could not open a browser: go to ${url}`);
+    }).unref();
+}
+
+const MAX_PORT_TRIES = 20;
+let portTries = 0;
+
+server.on("error", (e: NodeJS.ErrnoException) => {
+    if (e.code === "EADDRINUSE" && !opts.portGiven && ++portTries < MAX_PORT_TRIES) {
+        opts.port++; // the Host check in allowed() follows opts.port
+        server.listen(opts.port, "127.0.0.1");
+        return;
+    }
     console.error(`could not start the web server: ${e.message}`);
     process.exit(1);
 });
 
-server.listen(opts.port, "127.0.0.1", () => {
-    console.log(`mtce web front end: http://localhost:${opts.port}  (${opts.threads} threads, mtce at ${opts.mtce}; Ctrl+C to stop)`);
+server.on("listening", () => {
+    const url = `http://localhost:${opts.port}`;
+    console.log(`mtce web front end: ${url}  (${opts.threads} threads, mtce at ${opts.mtce}; Ctrl+C to stop)`);
+    if (opts.open) {
+        openBrowser(url);
+    }
 });
+
+server.listen(opts.port, "127.0.0.1");
