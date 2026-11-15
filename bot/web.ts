@@ -14,6 +14,7 @@ import {availableParallelism} from "node:os";
 import {dirname, join} from "node:path";
 import {fileURLToPath} from "node:url";
 import {file as createTmpFile} from "tmp-promise";
+import {countMaxedStats} from "./ansi";
 import {loadEffectNames} from "./effects";
 import {parseConfigText} from "./config_text";
 import {charmEntries, parseCharmText} from "./charm_data";
@@ -124,6 +125,7 @@ interface EvalResult {
     maxCp: number;
     upgradesUsed: number;
     maxUpgrades?: number;
+    maxedStats: number;  // stats at or over their cap (gold)
     statsAnsi: string;
     traceAnsi?: string;  // search statistics, when the trace toggle is on
 }
@@ -225,6 +227,7 @@ async function startJob(configText: string, charmText: string, options: RunOptio
             maxCp: cp,
             upgradesUsed: chosen.filter(c => c.upgraded).length,
             maxUpgrades,
+            maxedStats: countMaxedStats(output.statsAnsi),
             statsAnsi: output.statsAnsi,
             traceAnsi: options.trace ? spawn.stderr.toString("utf8") : undefined,
         };

@@ -114,3 +114,9 @@ export function compactAnsi(text: string): string {
     // eslint-disable-next-line no-control-regex -- matching ANSI escape sequences is the point
     return text.replace(/(?:\u001b\[[0-9;]*m)+(\u001b\[[0-9;]*m)/g, "$1");
 }
+
+// How many stats mtce printed as maxed (at or over their cap, shown in gold). Lines are recognized by that color, which mtce
+// uses only for capped stats in the stats list.
+export function countMaxedStats(statsAnsi: string): number {
+    return statsAnsi.split("\n").filter(line => line.includes(`${ESC}[38;2;228;155;32m`)).length;
+}

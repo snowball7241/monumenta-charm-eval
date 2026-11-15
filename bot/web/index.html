@@ -464,6 +464,7 @@ function showResult(job) {
         `<span>Weight <b>${escapeHtml(r.weight)}</b></span>` +
         `<span>Charm power <b>${r.cpUsed}/${r.maxCp}</b></span>` +
         `<span>Upgrades <b>${r.upgradesUsed}${r.maxUpgrades !== undefined ? `/${r.maxUpgrades}` : ""}</b></span>` +
+        `<span>Maxed stats <b style="color:#e49b20">${r.maxedStats}</b></span>` +
         `<span class="muted">${fmtElapsed(job.elapsedMs)}</span>`;
     els.chosen.innerHTML = r.charms.length === 0 ? `<li class="muted">No charm improves the score.</li>` : r.charms.map(c =>
         `<li><span style="color:${RARITY_COLORS[Math.max(0, Math.min(4, c.rarity))]}">${escapeHtml(c.name)}</span><span class="cp">${c.charmPower} CP</span></li>`

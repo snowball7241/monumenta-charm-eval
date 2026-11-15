@@ -1,4 +1,4 @@
-import {colorByRarity, compactAnsi, toDiscordAnsi} from "./ansi";
+import {colorByRarity, compactAnsi, countMaxedStats, toDiscordAnsi} from "./ansi";
 
 export const DISCORD_MESSAGE_LIMIT = 2000;
 
@@ -27,7 +27,8 @@ export function formatEvalMessage(input: EvalMessageInput): string {
 
     const summary =
         `Charm power used: ${cpUsed}/${input.maxCp}\n` +
-        `Upgrades used: ${upgradesUsed}${input.maxUpgrades !== undefined ? `/${input.maxUpgrades}` : ""}\n`;
+        `Upgrades used: ${upgradesUsed}${input.maxUpgrades !== undefined ? `/${input.maxUpgrades}` : ""}\n` +
+        `Maxed stats: ${countMaxedStats(input.statsAnsi)}\n`;
 
     const build = (colored: boolean, statsLines: string[], omitted: number) =>
         (input.note !== undefined ? `${input.note}\n` : "") +
