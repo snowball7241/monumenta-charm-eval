@@ -321,7 +321,7 @@ namespace mtce
 
                 for (const auto ability_id : important_abilities)
                 {
-                    const auto rel_value = charm.charm_data.at(ability_id) / EFFECT_CAPS.at(ability_id);
+                    const auto rel_value = charm.charm_data.at(ability_id) / EFFECT_SCALES.at(ability_id);
                     has_nonzero |= (charm.charm_data.at(ability_id) != 0);
                     charm_compact.stat_table.push_back((int32_t)(rel_value * ENCODED_CHARM_STAT_SCALE));
                 }

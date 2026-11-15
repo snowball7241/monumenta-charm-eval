@@ -177,7 +177,7 @@ namespace mtce
                     {
                         continue;
                     }
-                    const auto rel_value = raw / EFFECT_CAPS.at(abilities[j]);
+                    const auto rel_value = raw / EFFECT_SCALES.at(abilities[j]);
                     s.stats.push_back({.effect = (uint32_t)j, .value = (int32_t)(rel_value * ENCODED_CHARM_STAT_SCALE)});
                 }
 

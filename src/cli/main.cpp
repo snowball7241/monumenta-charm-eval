@@ -62,7 +62,8 @@ namespace
             auto caps = EFFECT_CAPS.at(ability);
             auto value = stats.at(ability);
             bool is_important = cfg.ability_weights.contains(std::string(EFFECT_NAMES.at(ability)));
-            bool is_negative = caps < 0;
+            bool has_cap = caps != 0; // the API reports 0 for effects with no cap
+            bool is_negative = EFFECT_SCALES.at(ability) < 0;
 
             std::string line;
 
@@ -78,7 +79,7 @@ namespace
             else if ((value < 0) == is_negative)
             {
                 // "good" charm - check for caps
-                if (std::abs(caps) < std::abs(value))
+                if (has_cap && std::abs(caps) < std::abs(value))
                 {
                     // capped - display overflow
                     auto delta = std::abs(value) - std::abs(caps);
@@ -86,7 +87,7 @@ namespace
                         CAPPED_COLOR, std::format("{} {} ({} overflow)", display_name, format(ability, caps), format<false>(ability, delta))
                     );
                 }
-                else if (std::abs(caps) == std::abs(value))
+                else if (has_cap && std::abs(caps) == std::abs(value))
                 {
                     // capped - don't display overflow since cap == value
                     line = colorize(CAPPED_COLOR, std::format("{} {}", display_name, format(ability, caps)));

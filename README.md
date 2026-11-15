@@ -122,6 +122,10 @@ volcanic_meteor_radius = 7000
 Assign higher weights to more important effects. Avoid specifying weights for effects you don't care about - performance optimizations rely on
 minimizing the number of effects.
 
+A weight is the value of taking an effect from 0 to its cap. A few effects have no cap (the Monumenta API reports a cap of 0
+for them, e.g. Steel Stallion Health, Volley Arrows and the Frostborn Ice Durations). For those, the weight is the value of
+reaching 10 times the effect's highest rarity value instead, which no set can reach, so they are never shown as maxed.
+
 `max_upgrades` is a hard limit; `upgrade_penalty` is a soft cost that only lets an upgrade in when it improves the set by more than the
 penalty. They can be combined. Both can also be given on the command line as `--config-max-upgrades` and `--config-upgrade-penalty`.
 
